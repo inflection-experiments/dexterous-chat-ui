@@ -1,8 +1,13 @@
 <script lang="ts">
   import type { StructuredResponse } from '$lib/types/chat.ts';
+  import { browser } from '$app/environment';
+  import Icon from '@iconify/svelte';
 
   export let data: StructuredResponse;
   export let actions: string[] = [];
+
+  // Track selected rows
+  let selectedRows = new Set<number>();
 
   // Debug logging
   console.log('StructuredDataViewer received data:', data);
@@ -23,6 +28,86 @@
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
+  };
+
+  // Toggle row selection
+  const toggleRowSelection = (index: number) => {
+    selectedRows = new Set(selectedRows);
+    if (selectedRows.has(index)) {
+      selectedRows.delete(index);
+    } else {
+      selectedRows.add(index);
+    }
+    selectedRows = selectedRows; // Trigger reactivity
+  };
+
+  // Toggle select all rows
+  const toggleSelectAll = () => {
+    if (!data.Data || !Array.isArray(data.Data)) return;
+    
+    if (selectedRows.size === data.Data.length) {
+      selectedRows.clear();
+    } else {
+      selectedRows = new Set(Array.from({ length: data.Data.length }, (_, i) => i));
+    }
+    selectedRows = selectedRows; // Trigger reactivity
+  };
+
+  // Check if all rows are selected
+  const isAllSelected = () => {
+    if (!data.Data || !Array.isArray(data.Data) || data.Data.length === 0) return false;
+    return selectedRows.size === data.Data.length;
+  };
+
+  // Add selected data to local storage
+  const addToDatabase = () => {
+    if (!browser) return;
+    
+    if (selectedRows.size === 0) {
+      alert('Please select at least one row to add to database');
+      return;
+    }
+
+    if (!data.Data || !Array.isArray(data.Data)) return;
+
+    // Get selected rows
+    const dataArray = data.Data;
+    const selectedData = Array.from(selectedRows)
+      .sort((a, b) => a - b)
+      .map(index => dataArray[index]);
+
+    // Get existing data from localStorage
+    const storageKey = 'database_records';
+    const existingData = localStorage.getItem(storageKey);
+    let databaseRecords: any[] = [];
+
+    if (existingData) {
+      try {
+        databaseRecords = JSON.parse(existingData);
+      } catch (e) {
+        console.error('Error parsing existing database records:', e);
+        databaseRecords = [];
+      }
+    }
+
+    // Add new records with timestamp
+    const newRecords = selectedData.map(record => ({
+      ...record,
+      _addedAt: new Date().toISOString(),
+      _id: Date.now() + Math.random()
+    }));
+
+    databaseRecords.push(...newRecords);
+
+    // Save back to localStorage
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(databaseRecords));
+      alert(`Successfully added ${selectedRows.size} row(s) to database`);
+      selectedRows = new Set(); // Clear and trigger reactivity
+    } catch (e) {
+      console.error('Error saving to localStorage:', e);
+      alert('Error saving to database. Please try again.');
+    }
   };
 </script>
 
@@ -45,14 +130,16 @@
             on:click={() => copyToClipboard(JSON.stringify(data.Data, null, 2))}
             title="Copy to clipboard"
           >
-            📋 Copy
+            <Icon icon="mdi:content-copy" style="width: 1rem; height: 1rem;" />
+            Copy
           </button>
           <button 
             class="action-button" 
             on:click={() => downloadData('json')}
             title="Download JSON"
           >
-            ⬇️ Download
+            <Icon icon="mdi:download" style="width: 1rem; height: 1rem;" />
+            Download
           </button>
         </div>
       </div>
@@ -67,17 +154,48 @@
       <!-- Table Viewer -->
       {#if data.Data && Array.isArray(data.Data) && data.Data.length > 0}
         <div class="table-viewer">
+          <div class="table-controls">
+            <button 
+              class="add-database-button" 
+              on:click={addToDatabase}
+              disabled={selectedRows.size === 0}
+              title="Add selected rows to database"
+            >
+              <Icon icon="mdi:database-plus" style="width: 1.25rem; height: 1.25rem;" />
+              ADD DATABASE
+            </button>
+            {#if selectedRows.size > 0}
+              <span class="selection-count">{selectedRows.size} row(s) selected</span>
+            {/if}
+          </div>
           <table>
             <thead>
               <tr>
+                <th class="checkbox-column">
+                  <input
+                    type="checkbox"
+                    checked={isAllSelected()}
+                    on:change={toggleSelectAll}
+                    class="row-checkbox"
+                    title="Select all rows"
+                  />
+                </th>
                 {#each Object.keys(data.Data[0]) as header}
                   <th>{header}</th>
                 {/each}
               </tr>
             </thead>
             <tbody>
-              {#each data.Data as row}
-                <tr>
+              {#each data.Data as row, rowIndex}
+                <tr class:selected={selectedRows.has(rowIndex)}>
+                  <td class="checkbox-column">
+                    <input
+                      type="checkbox"
+                      checked={selectedRows.has(rowIndex)}
+                      on:change={() => toggleRowSelection(rowIndex)}
+                      class="row-checkbox"
+                    />
+                  </td>
                   {#each Object.values(row) as cell}
                     <td>{cell}</td>
                   {/each}
@@ -159,6 +277,9 @@
     border-radius: 0.25rem;
     cursor: pointer;
     transition: background-color 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
   }
 
   .action-button:hover {
@@ -184,6 +305,44 @@
     overflow-x: auto;
   }
 
+  .table-controls {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1rem;
+    padding: 0.5rem;
+  }
+
+  .add-database-button {
+    padding: 0.5rem 1rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    background-color: #3b82f6;
+    color: white;
+    border: none;
+    border-radius: 0.375rem;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .add-database-button:hover:not(:disabled) {
+    background-color: #2563eb;
+  }
+
+  .add-database-button:disabled {
+    background-color: #9ca3af;
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+
+  .selection-count {
+    font-size: 0.875rem;
+    color: #6b7280;
+  }
+
   .table-viewer table {
     width: 100%;
     border-collapse: collapse;
@@ -201,6 +360,30 @@
     background-color: #f9fafb;
     font-weight: 600;
     color: #374151;
+  }
+
+  .checkbox-column {
+    width: 3rem;
+    text-align: center;
+  }
+
+  .row-checkbox {
+    width: 1rem;
+    height: 1rem;
+    cursor: pointer;
+    accent-color: #3b82f6;
+  }
+
+  .table-viewer tbody tr.selected {
+    background-color: #dbeafe;
+  }
+
+  .table-viewer tbody tr:hover {
+    background-color: #f3f4f6;
+  }
+
+  .table-viewer tbody tr.selected:hover {
+    background-color: #bfdbfe;
   }
 
   .suggested-actions {
