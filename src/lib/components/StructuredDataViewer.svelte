@@ -3,11 +3,10 @@
   import { browser } from '$app/environment';
   import Icon from '@iconify/svelte';
 
-  export let data: StructuredResponse;
-  export let actions: string[] = [];
+  let { data, actions = [] }: { data: StructuredResponse; actions?: string[] } = $props();
 
   // Track selected rows
-  let selectedRows = new Set<number>();
+  let selectedRows = $state(new Set<number>());
 
   // Debug logging
   console.log('StructuredDataViewer received data:', data);
@@ -32,13 +31,13 @@
 
   // Toggle row selection
   const toggleRowSelection = (index: number) => {
-    selectedRows = new Set(selectedRows);
     if (selectedRows.has(index)) {
       selectedRows.delete(index);
     } else {
       selectedRows.add(index);
     }
-    selectedRows = selectedRows; // Trigger reactivity
+    // Trigger reactivity by reassigning
+    selectedRows = new Set(selectedRows);
   };
 
   // Toggle select all rows
@@ -50,7 +49,8 @@
     } else {
       selectedRows = new Set(Array.from({ length: data.Data.length }, (_, i) => i));
     }
-    selectedRows = selectedRows; // Trigger reactivity
+    // Trigger reactivity by reassigning
+    selectedRows = new Set(selectedRows);
   };
 
   // Check if all rows are selected
@@ -103,7 +103,9 @@
     try {
       localStorage.setItem(storageKey, JSON.stringify(databaseRecords));
       alert(`Successfully added ${selectedRows.size} row(s) to database`);
-      selectedRows = new Set(); // Clear and trigger reactivity
+      selectedRows.clear();
+      // Trigger reactivity by reassigning
+      selectedRows = new Set(selectedRows);
     } catch (e) {
       console.error('Error saving to localStorage:', e);
       alert('Error saving to database. Please try again.');
@@ -127,7 +129,7 @@
         <div class="data-actions">
           <button 
             class="action-button" 
-            on:click={() => copyToClipboard(JSON.stringify(data.Data, null, 2))}
+            onclick={() => copyToClipboard(JSON.stringify(data.Data, null, 2))}
             title="Copy to clipboard"
           >
             <Icon icon="mdi:content-copy" style="width: 1rem; height: 1rem;" />
@@ -135,7 +137,7 @@
           </button>
           <button 
             class="action-button" 
-            on:click={() => downloadData('json')}
+            onclick={() => downloadData('json')}
             title="Download JSON"
           >
             <Icon icon="mdi:download" style="width: 1rem; height: 1rem;" />
@@ -157,7 +159,7 @@
           <div class="table-controls">
             <button 
               class="add-database-button" 
-              on:click={addToDatabase}
+              onclick={addToDatabase}
               disabled={selectedRows.size === 0}
               title="Add selected rows to database"
             >
@@ -175,7 +177,7 @@
                   <input
                     type="checkbox"
                     checked={isAllSelected()}
-                    on:change={toggleSelectAll}
+                    onchange={toggleSelectAll}
                     class="row-checkbox"
                     title="Select all rows"
                   />
@@ -192,7 +194,7 @@
                     <input
                       type="checkbox"
                       checked={selectedRows.has(rowIndex)}
-                      on:change={() => toggleRowSelection(rowIndex)}
+                      onchange={() => toggleRowSelection(rowIndex)}
                       class="row-checkbox"
                     />
                   </td>

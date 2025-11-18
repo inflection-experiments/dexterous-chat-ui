@@ -1,5 +1,4 @@
 <script>
-  import { onMount } from 'svelte';
   
   let markdownContent = `# 🚀 Complete Markdown Demo
 
@@ -231,7 +230,7 @@ All API responses follow this structure:
 
 **Note:** This is a comprehensive demo showing tables, lists, code blocks, and inline formatting like \`code\`, **bold**, and normal text.`;
 
-  let parsedContent = [];
+  let parsedContent = $state(parseMarkdown(markdownContent));
 
   function parseMarkdown(md) {
     const lines = md.split('\n');
@@ -344,10 +343,6 @@ All API responses follow this structure:
     text = text.replace(/`(.*?)`/g, '<code class="bg-gray-100 px-1.5 py-0.5 rounded text-sm font-mono text-purple-600">$1</code>');
     return text;
   }
-
-  onMount(() => {
-    parsedContent = parseMarkdown(markdownContent);
-  });
 </script>
 
 <div class="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 py-8">

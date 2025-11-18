@@ -1,13 +1,14 @@
 <script lang="ts">
 	import type { Message } from '$lib/types/chat.ts';
+	import type { Conversation } from '$lib/types/botTypes';
 	import Icon from '@iconify/svelte';
+	import type { PageData } from './$types';
 
-	// import type { Message } from '$lib/types/chat';
+	let { data }: { data: PageData } = $props();
 
-	const CONVERSATION_ID = '98b6495b-01fe-445f-804e-c20e1d3ba2d0';
-	const USER_ID = '74f22a5f-8ed2-45ce-af2e-ac4c32d824f4';
-	const REFERENCE_MESSAGE_ID = '123e4567-e89b-12d3-a456-426655440000';
-
+	const userId = data.userId;
+	let conversations = $state<Conversation[]>(data.conversations || []);
+	let selectedConversationId = $state<string | null>(null);
 	let messages = $state<Message[]>([]);
 	let newMessageText = $state('');
 	let chatContainer = $state<HTMLElement | null>(null);
@@ -15,252 +16,141 @@
 	let isLoading = $state(false);
 	let sidebarOpen = $state(true);
 	let inputFocused = $state(false);
+	let loadingConversations = $state(false);
 
 	// Store parsed content for each message to enable editing
 	let parsedMessageContent = $state(new Map<number | string, any[]>());
 
-	// Store selection state for each message: { messageId: { blockIndex: { type: 'table'|'list'|'checklist', selected: Set<indices> } } }
+	// Store selection state for each message
 	let selectionState = $state(
 		new Map<number | string, Map<number, { type: string; selected: Set<number> }>>()
 	);
 
-	// Markdown parsing functions
-	function parseMarkdown(md: string) {
-		const lines = md.split('\n');
-		const result: any[] = [];
-		let i = 0;
+	// Local storage key
+	const STORAGE_KEY = `dexterous_conversations_${userId}`;
 
-		while (i < lines.length) {
-			const line = lines[i];
-
-			// Code block
-			if (line.trim().startsWith('```')) {
-				const language = line.trim().substring(3);
-				const codeLines = [];
-				i++;
-				while (i < lines.length && !lines[i].trim().startsWith('```')) {
-					codeLines.push(lines[i]);
-					i++;
-				}
-				result.push({ type: 'code', language, content: codeLines.join('\n') });
-				i++;
-			}
-			// H1
-			else if (line.startsWith('# ')) {
-				result.push({ type: 'h1', content: line.substring(2) });
-				i++;
-			}
-			// H2
-			else if (line.startsWith('## ')) {
-				result.push({ type: 'h2', content: line.substring(3) });
-				i++;
-			}
-			// H3
-			else if (line.startsWith('### ')) {
-				result.push({ type: 'h3', content: line.substring(4) });
-				i++;
-			}
-			// HR
-			else if (line.trim() === '---') {
-				result.push({ type: 'hr' });
-				i++;
-			}
-			// Table
-			else if (line.includes('|') && line.trim().startsWith('|')) {
-				const tableLines = [];
-				while (i < lines.length && lines[i].includes('|')) {
-					tableLines.push(lines[i]);
-					i++;
-				}
-				result.push({ type: 'table', content: parseTable(tableLines) });
-			}
-			// Checkbox list
-			else if (line.trim().match(/^- \[[ x]\]/)) {
-				const listItems = [];
-				while (i < lines.length && lines[i].trim().match(/^- \[[ x]\]/)) {
-					const checked = lines[i].includes('[x]');
-					const text = lines[i].trim().substring(6);
-					listItems.push({ checked, text });
-					i++;
-				}
-				result.push({ type: 'checklist', content: listItems });
-			}
-			// Bullet list
-			else if (line.trim().startsWith('- ')) {
-				const listItems = [];
-				while (
-					i < lines.length &&
-					(lines[i].trim().startsWith('- ') || lines[i].trim().startsWith('  -'))
-				) {
-					const indent = lines[i].search(/\S/);
-					const text = lines[i].trim().substring(2);
-					listItems.push({ text, indent });
-					i++;
-				}
-				result.push({ type: 'list', content: listItems });
-			}
-			// Paragraph
-			else if (line.trim() !== '') {
-				result.push({ type: 'p', content: line });
-				i++;
-			}
-			// Empty line
-			else {
-				i++;
-			}
+	// Local storage functions
+	function saveToLocalStorage() {
+		if (!selectedConversationId) {
+			alert('Please start a conversation first');
+			return;
 		}
 
-		return result;
-	}
+		try {
+			const stored = localStorage.getItem(STORAGE_KEY);
+			const allStored: any = stored ? JSON.parse(stored) : {};
 
-	function parseTable(lines: string[]) {
-		if (lines.length < 2) return { headers: [], rows: [] };
+			// Get all selected items from all tables
+			const newSelectedItems: any[] = [];
 
-		const headers = lines[0]
-			.split('|')
-			.map((h) => h.trim())
-			.filter((h) => h !== '');
+			// Collect all selected table rows from all messages
+			selectionState.forEach((messageSelections, messageId) => {
+				messageSelections.forEach((state, blockIndex) => {
+					if (state.type === 'table-rows' && state.selected.size > 0) {
+						const parsed = parsedMessageContent.get(messageId);
+						if (parsed && parsed[blockIndex]?.type === 'table') {
+							const table = parsed[blockIndex];
+							const selectedRows = Array.from(state.selected).map((rowIdx) => ({
+								headers: table.content.headers,
+								row: table.content.rows[rowIdx],
+								rowIndex: rowIdx
+							}));
 
-		const rows = lines.slice(2).map((row) =>
-			row
-				.split('|')
-				.map((cell) => cell.trim())
-				.filter((cell) => cell !== '')
-		);
+							newSelectedItems.push({
+								messageId: String(messageId),
+								blockIndex,
+								tableHeaders: table.content.headers,
+								selectedRows
+							});
+						}
+					}
+				});
+			});
 
-		return { headers, rows };
-	}
-
-	function parseInlineFormatting(text: string) {
-		// Bold
-		text = text.replace(/\*\*(.*?)\*\*/g, '<strong class="font-semibold text-white">$1</strong>');
-		// Code
-		text = text.replace(
-			/`(.*?)`/g,
-			'<code class="bg-white/10 px-1.5 py-0.5 rounded text-sm font-mono text-[#ff6b35]">$1</code>'
-		);
-		return text;
-	}
-
-	// Reconstruct markdown from parsed blocks
-	function reconstructMarkdown(blocks: any[]): string {
-		let md = '';
-
-		for (const block of blocks) {
-			if (block.type === 'h1') {
-				md += `# ${block.content}\n\n`;
-			} else if (block.type === 'h2') {
-				md += `## ${block.content}\n\n`;
-			} else if (block.type === 'h3') {
-				md += `### ${block.content}\n\n`;
-			} else if (block.type === 'hr') {
-				md += '---\n\n';
-			} else if (block.type === 'code') {
-				md += `\`\`\`${block.language || ''}\n${block.content}\n\`\`\`\n\n`;
-			} else if (block.type === 'table') {
-				// Reconstruct table
-				const headers = block.content.headers.join(' | ');
-				md += `| ${headers} |\n`;
-				md += `| ${block.content.headers.map(() => '---').join(' | ')} |\n`;
-				for (const row of block.content.rows) {
-					md += `| ${row.join(' | ')} |\n`;
-				}
-				md += '\n';
-			} else if (block.type === 'checklist') {
-				for (const item of block.content) {
-					md += `- [${item.checked ? 'x' : ' '}] ${item.text}\n`;
-				}
-				md += '\n';
-			} else if (block.type === 'list') {
-				for (const item of block.content) {
-					const indent = ' '.repeat(item.indent);
-					md += `${indent}- ${item.text}\n`;
-				}
-				md += '\n';
-			} else if (block.type === 'p') {
-				md += `${block.content}\n\n`;
+			if (newSelectedItems.length === 0) {
+				alert('No rows selected. Please select table rows first.');
+				return;
 			}
-		}
 
-		return md.trim();
-	}
+			// Get existing data for this conversation or create new
+			const existingData = allStored[selectedConversationId] || {
+				conversationId: selectedConversationId,
+				userId: userId,
+				timestamp: new Date().toISOString(),
+				selectedItems: []
+			};
 
-	// Get or parse content for a message
-	function getParsedContent(messageId: number | string, content: string): any[] {
-		if (!parsedMessageContent.has(messageId)) {
-			parsedMessageContent.set(messageId, parseMarkdown(content));
-		}
-		return parsedMessageContent.get(messageId)!;
-	}
-
-	// Update message content after editing
-	function updateMessageContent(messageId: number | string) {
-		const parsed = parsedMessageContent.get(messageId);
-		if (parsed) {
-			const newContent = reconstructMarkdown(parsed);
-			messages = messages.map((msg) =>
-				msg.id === messageId ? { ...msg, Content: newContent } : msg
+			// Merge new selections with existing ones (avoid duplicates)
+			const existingItemKeys = new Set(
+				existingData.selectedItems.map((item: any) => `${item.messageId}-${item.blockIndex}`)
 			);
-			// Update the parsed content map with the modified parsed blocks
-			parsedMessageContent.set(messageId, [...parsed]);
+
+			// Add only new items that don't already exist
+			newSelectedItems.forEach((item) => {
+				const key = `${item.messageId}-${item.blockIndex}`;
+				if (!existingItemKeys.has(key)) {
+					existingData.selectedItems.push(item);
+				} else {
+					// Update existing item with new selections
+					const existingItem = existingData.selectedItems.find(
+						(existing: any) => `${existing.messageId}-${existing.blockIndex}` === key
+					);
+					if (existingItem) {
+						// Merge selected rows
+						const existingRowIndices = new Set(
+							existingItem.selectedRows.map((r: any) => r.rowIndex)
+						);
+						item.selectedRows.forEach((row: any) => {
+							if (!existingRowIndices.has(row.rowIndex)) {
+								existingItem.selectedRows.push(row);
+							}
+						});
+					}
+				}
+			});
+
+			// Update timestamp
+			existingData.timestamp = new Date().toISOString();
+
+			// Store by conversation ID
+			allStored[selectedConversationId] = existingData;
+			localStorage.setItem(STORAGE_KEY, JSON.stringify(allStored));
+
+			// Count total rows stored
+			const totalRows = existingData.selectedItems.reduce(
+				(sum: number, item: any) => sum + item.selectedRows.length,
+				0
+			);
+
+			alert(
+				`Successfully stored ${totalRows} row(s) from ${newSelectedItems.length} table(s) to local storage!`
+			);
+
+			// Clear selections after storing
+			selectionState.forEach((messageSelections) => {
+				messageSelections.forEach((state) => {
+					if (state.type === 'table-rows') {
+						state.selected.clear();
+					}
+				});
+			});
+			// Trigger reactivity
+			selectionState = new Map(selectionState);
+		} catch (error) {
+			console.error('Error saving to local storage:', error);
+			alert('Error saving to local storage. Please try again.');
 		}
 	}
 
-	// Delete table row
-	function deleteTableRow(messageId: number | string, blockIndex: number, rowIndex: number) {
-		const parsed = parsedMessageContent.get(messageId);
-		if (parsed && parsed[blockIndex]?.type === 'table') {
-			const newParsed = [...parsed];
-			const tableBlock = { ...newParsed[blockIndex] };
-			tableBlock.content = {
-				...tableBlock.content,
-				rows: tableBlock.content.rows.filter((_: any, idx: number) => idx !== rowIndex)
-			};
-			newParsed[blockIndex] = tableBlock;
-			parsedMessageContent.set(messageId, newParsed);
-			updateMessageContent(messageId);
-		}
-	}
+	function loadFromLocalStorage() {
+		try {
+			const stored = localStorage.getItem(STORAGE_KEY);
+			if (!stored) return null;
 
-	// Delete table column
-	function deleteTableColumn(messageId: number | string, blockIndex: number, colIndex: number) {
-		const parsed = parsedMessageContent.get(messageId);
-		if (parsed && parsed[blockIndex]?.type === 'table') {
-			const newParsed = [...parsed];
-			const tableBlock = { ...newParsed[blockIndex] };
-			const oldContent = tableBlock.content;
-			tableBlock.content = {
-				headers: oldContent.headers.filter((_: string, idx: number) => idx !== colIndex),
-				rows: oldContent.rows.map((row: string[]) =>
-					row.filter((_: string, idx: number) => idx !== colIndex)
-				)
-			};
-			newParsed[blockIndex] = tableBlock;
-			parsedMessageContent.set(messageId, newParsed);
-			updateMessageContent(messageId);
-		}
-	}
-
-	// Delete list item
-	function deleteListItem(messageId: number | string, blockIndex: number, itemIndex: number) {
-		const parsed = parsedMessageContent.get(messageId);
-		if (
-			parsed &&
-			(parsed[blockIndex]?.type === 'list' || parsed[blockIndex]?.type === 'checklist')
-		) {
-			const newParsed = [...parsed];
-			const listBlock = { ...newParsed[blockIndex] };
-			listBlock.content = listBlock.content.filter((_: any, idx: number) => idx !== itemIndex);
-
-			// If list is empty, remove the entire block
-			if (listBlock.content.length === 0) {
-				newParsed.splice(blockIndex, 1);
-			} else {
-				newParsed[blockIndex] = listBlock;
-			}
-
-			parsedMessageContent.set(messageId, newParsed);
-			updateMessageContent(messageId);
+			return JSON.parse(stored);
+		} catch (error) {
+			console.error('Error loading from local storage:', error);
+			return null;
 		}
 	}
 
@@ -274,7 +164,6 @@
 			messageSelections.set(blockIndex, { type: itemType, selected: new Set<number>() });
 		}
 		const state = messageSelections.get(blockIndex)!;
-		// Clear selection if switching types
 		if (state.type !== itemType) {
 			state.type = itemType;
 			state.selected.clear();
@@ -294,7 +183,7 @@
 		} else {
 			state.selected.add(itemIndex);
 		}
-		// Trigger reactivity
+		// Trigger reactivity by reassigning
 		selectionState = new Map(selectionState);
 	}
 
@@ -306,7 +195,6 @@
 	): boolean {
 		const state = selectionState.get(messageId)?.get(blockIndex);
 		if (!state) return false;
-		// If itemType is provided, only check if types match
 		if (itemType && state.type !== itemType) return false;
 		return state.selected.has(itemIndex) ?? false;
 	}
@@ -327,69 +215,6 @@
 		selectionState = new Map(selectionState);
 	}
 
-	function deleteSelectedItems(messageId: number | string, blockIndex: number) {
-		const state = selectionState.get(messageId)?.get(blockIndex);
-		if (!state || state.selected.size === 0) return;
-
-		const parsed = parsedMessageContent.get(messageId);
-		if (!parsed) return;
-
-		const newParsed = [...parsed];
-		const block = newParsed[blockIndex];
-
-		if (block.type === 'table' && state.type === 'table-rows') {
-			const tableBlock = { ...block };
-			tableBlock.content = {
-				...tableBlock.content,
-				rows: tableBlock.content.rows.filter((_: any, idx: number) => !state.selected.has(idx))
-			};
-			newParsed[blockIndex] = tableBlock;
-		} else if (block.type === 'list' || block.type === 'checklist') {
-			const listBlock = { ...block };
-			listBlock.content = listBlock.content.filter(
-				(_: any, idx: number) => !state.selected.has(idx)
-			);
-
-			if (listBlock.content.length === 0) {
-				newParsed.splice(blockIndex, 1);
-			} else {
-				newParsed[blockIndex] = listBlock;
-			}
-		}
-
-		// Clear selection
-		state.selected.clear();
-		parsedMessageContent.set(messageId, newParsed);
-		updateMessageContent(messageId);
-		selectionState = new Map(selectionState);
-	}
-
-	function deleteSelectedColumns(messageId: number | string, blockIndex: number) {
-		const state = selectionState.get(messageId)?.get(blockIndex);
-		if (!state || state.selected.size === 0 || state.type !== 'table-columns') return;
-
-		const parsed = parsedMessageContent.get(messageId);
-		if (!parsed || parsed[blockIndex]?.type !== 'table') return;
-
-		const newParsed = [...parsed];
-		const tableBlock = { ...newParsed[blockIndex] };
-		const oldContent = tableBlock.content;
-
-		tableBlock.content = {
-			headers: oldContent.headers.filter((_: string, idx: number) => !state.selected.has(idx)),
-			rows: oldContent.rows.map((row: string[]) =>
-				row.filter((_: string, idx: number) => !state.selected.has(idx))
-			)
-		};
-
-		// Clear selection
-		state.selected.clear();
-		newParsed[blockIndex] = tableBlock;
-		parsedMessageContent.set(messageId, newParsed);
-		updateMessageContent(messageId);
-		selectionState = new Map(selectionState);
-	}
-
 	function getSelectedCount(
 		messageId: number | string,
 		blockIndex: number,
@@ -399,6 +224,208 @@
 		if (!state) return 0;
 		if (itemType && state.type !== itemType) return 0;
 		return state.selected.size ?? 0;
+	}
+
+	// Format date for display
+	function formatDate(dateString: string): string {
+		const date = new Date(dateString);
+		const now = new Date();
+		const diffMs = now.getTime() - date.getTime();
+		const diffMins = Math.floor(diffMs / 60000);
+		const diffHours = Math.floor(diffMs / 3600000);
+		const diffDays = Math.floor(diffMs / 86400000);
+
+		if (diffMins < 1) return 'Just now';
+		if (diffMins < 60) return `${diffMins} minute${diffMins !== 1 ? 's' : ''} ago`;
+		if (diffHours < 24) return `${diffHours} hour${diffHours !== 1 ? 's' : ''} ago`;
+		if (diffDays < 7) return `${diffDays} day${diffDays !== 1 ? 's' : ''} ago`;
+		return date.toLocaleDateString();
+	}
+
+	// Load conversations
+	async function loadConversations() {
+		loadingConversations = true;
+		try {
+			// Load from API
+			const response = await fetch(`/api/server/conversations?userId=${userId}`);
+			const result = await response.json();
+			const apiConversations = result.conversations || [];
+
+			// Load from local storage
+			const storedData = loadFromLocalStorage();
+
+			// Merge conversations (prioritize API, but include stored data)
+			const conversationMap = new Map<string, Conversation>();
+
+			// Add API conversations
+			apiConversations.forEach((conv: Conversation) => {
+				conversationMap.set(conv.id, conv);
+			});
+
+			// Add stored conversations that aren't in API
+			if (storedData) {
+				Object.keys(storedData).forEach((convId) => {
+					if (!conversationMap.has(convId)) {
+						// Create a conversation object from stored data
+						const stored = storedData[convId];
+						conversationMap.set(convId, {
+							id: convId,
+							userId: stored.userId || userId,
+							botId: 'dexterous',
+							title: `Stored Conversation (${new Date(stored.timestamp).toLocaleDateString()})`,
+							createdAt: stored.timestamp,
+							updatedAt: stored.timestamp,
+							status: 'active'
+						});
+					}
+				});
+			}
+
+			conversations = Array.from(conversationMap.values());
+		} catch (error) {
+			console.error('Error loading conversations:', error);
+		} finally {
+			loadingConversations = false;
+		}
+	}
+
+	// Select a conversation and load its messages
+	async function selectConversation(conversationId: string) {
+		selectedConversationId = conversationId;
+		messages = [];
+		parsedMessageContent.clear();
+		selectionState.clear();
+
+		try {
+			// Load messages from API
+			const response = await fetch(
+				`/api/server/conversations/${conversationId}/messages?userId=${userId}`
+			);
+			if (response.ok) {
+				const result = await response.json();
+				// Transform backend messages to Message format
+				if (result.messages && Array.isArray(result.messages)) {
+					messages = result.messages.map((msg: any) => ({
+						id: msg.id || msg.Id,
+						Content: msg.content || msg.Content || msg.message || msg.Message || '',
+						Role: (msg.role || msg.Role || 'User') === 'user' ? 'User' : 'Assistant'
+					}));
+				}
+			}
+
+			// Also check local storage for stored data
+			const storedData = loadFromLocalStorage();
+			if (storedData && storedData[conversationId]) {
+				// Stored data is available but we keep API messages as primary
+				// The stored selections are available when user selects table rows
+				console.log('Stored data available for conversation:', storedData[conversationId]);
+			}
+
+			scrollToBottom();
+		} catch (error) {
+			console.error('Error loading conversation messages:', error);
+		}
+	}
+
+	// Markdown parsing functions (same as chat page)
+	function parseMarkdown(md: string) {
+		const lines = md.split('\n');
+		const result: any[] = [];
+		let i = 0;
+
+		while (i < lines.length) {
+			const line = lines[i];
+
+			if (line.trim().startsWith('```')) {
+				const language = line.trim().substring(3);
+				const codeLines = [];
+				i++;
+				while (i < lines.length && !lines[i].trim().startsWith('```')) {
+					codeLines.push(lines[i]);
+					i++;
+				}
+				result.push({ type: 'code', language, content: codeLines.join('\n') });
+				i++;
+			} else if (line.startsWith('# ')) {
+				result.push({ type: 'h1', content: line.substring(2) });
+				i++;
+			} else if (line.startsWith('## ')) {
+				result.push({ type: 'h2', content: line.substring(3) });
+				i++;
+			} else if (line.startsWith('### ')) {
+				result.push({ type: 'h3', content: line.substring(4) });
+				i++;
+			} else if (line.trim() === '---') {
+				result.push({ type: 'hr' });
+				i++;
+			} else if (line.includes('|') && line.trim().startsWith('|')) {
+				const tableLines = [];
+				while (i < lines.length && lines[i].includes('|')) {
+					tableLines.push(lines[i]);
+					i++;
+				}
+				result.push({ type: 'table', content: parseTable(tableLines) });
+			} else if (line.trim().match(/^- \[[ x]\]/)) {
+				const listItems = [];
+				while (i < lines.length && lines[i].trim().match(/^- \[[ x]\]/)) {
+					const checked = lines[i].includes('[x]');
+					const text = lines[i].trim().substring(6);
+					listItems.push({ checked, text });
+					i++;
+				}
+				result.push({ type: 'checklist', content: listItems });
+			} else if (line.trim().startsWith('- ')) {
+				const listItems = [];
+				while (
+					i < lines.length &&
+					(lines[i].trim().startsWith('- ') || lines[i].trim().startsWith('  -'))
+				) {
+					const indent = lines[i].search(/\S/);
+					const text = lines[i].trim().substring(2);
+					listItems.push({ text, indent });
+					i++;
+				}
+				result.push({ type: 'list', content: listItems });
+			} else if (line.trim() !== '') {
+				result.push({ type: 'p', content: line });
+				i++;
+			} else {
+				i++;
+			}
+		}
+
+		return result;
+	}
+
+	function parseTable(lines: string[]) {
+		if (lines.length < 2) return { headers: [], rows: [] };
+		const headers = lines[0]
+			.split('|')
+			.map((h) => h.trim())
+			.filter((h) => h !== '');
+		const rows = lines.slice(2).map((row) =>
+			row
+				.split('|')
+				.map((cell) => cell.trim())
+				.filter((cell) => cell !== '')
+		);
+		return { headers, rows };
+	}
+
+	function parseInlineFormatting(text: string) {
+		text = text.replace(/\*\*(.*?)\*\*/g, '<strong class="font-semibold text-white">$1</strong>');
+		text = text.replace(
+			/`(.*?)`/g,
+			'<code class="bg-white/10 px-1.5 py-0.5 rounded text-sm font-mono text-[#ff6b35]">$1</code>'
+		);
+		return text;
+	}
+
+	function getParsedContent(messageId: number | string, content: string): any[] {
+		if (!parsedMessageContent.has(messageId)) {
+			parsedMessageContent.set(messageId, parseMarkdown(content));
+		}
+		return parsedMessageContent.get(messageId)!;
 	}
 
 	const scrollToBottom = () => {
@@ -416,7 +443,12 @@
 		const trimmedMessage = newMessageText.trim();
 		if (trimmedMessage === '' || isLoading) return;
 
-		// Add user message to the UI
+		// Create new conversation if none selected
+		if (!selectedConversationId) {
+			// Generate a new conversation ID
+			selectedConversationId = `conv-${userId}-${Date.now()}`;
+		}
+
 		const userMessage: Message = {
 			id: Date.now(),
 			Content: trimmedMessage,
@@ -427,8 +459,11 @@
 		isLoading = true;
 		scrollToBottom();
 
+		const CONVERSATION_ID = '98b6495b-01fe-445f-804e-c20e1d3ba2d0';
+		const USER_ID = '74f22a5f-8ed2-45ce-af2e-ac4c32d824f4';
+		const REFERENCE_MESSAGE_ID = '123e4567-e89b-12d3-a456-426655440000';
+
 		try {
-			// Send message to our SvelteKit backend
 			const response = await fetch('/api/server/chat', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -442,7 +477,6 @@
 
 			if (response.ok) {
 				const result = await response.json();
-				// Handle the response structure from ResponseHandler
 				const content = result?.Content || result?.content || result?.message || result?.Message;
 				if (content) {
 					const assistantMessage: Message = {
@@ -452,6 +486,8 @@
 					};
 					messages = [...messages, assistantMessage];
 					scrollToBottom();
+					// Reload conversations to update the list
+					await loadConversations();
 				}
 			} else {
 				console.error('Failed to send message:', response.statusText);
@@ -496,18 +532,12 @@
 		}
 	});
 
-	$effect(() => {
-		// Set initial height after component mounts
-		setTimeout(() => {
-			if (inputElement) {
-				inputElement.style.height = '60px';
-			}
-		}, 0);
-	});
-
 	const newChat = () => {
+		selectedConversationId = null;
 		messages = [];
 		newMessageText = '';
+		parsedMessageContent.clear();
+		selectionState.clear();
 		if (inputElement) {
 			inputElement.style.height = 'auto';
 			setTimeout(() => {
@@ -517,6 +547,15 @@
 			}, 0);
 		}
 	};
+
+	$effect(() => {
+		setTimeout(() => {
+			if (inputElement) {
+				inputElement.style.height = '60px';
+			}
+		}, 0);
+		loadConversations();
+	});
 </script>
 
 <div
@@ -558,53 +597,37 @@
 				>
 					Recent Conversations
 				</h3>
-				<div class="flex flex-col gap-2">
-					<div
-						class="flex cursor-pointer items-center gap-3 rounded-[10px] px-3 py-3 transition-all duration-200 hover:bg-white/8"
-					>
-						<div class="flex h-9 w-9 items-center justify-center rounded-lg bg-white/5 text-xl">
-							💬
-						</div>
-						<div class="min-w-0 flex-1">
-							<div
-								class="mb-1 overflow-hidden text-sm font-medium text-ellipsis whitespace-nowrap text-white/90"
+				{#if loadingConversations}
+					<div class="text-sm text-white/40">Loading...</div>
+				{:else if conversations.length === 0}
+					<div class="text-sm text-white/40">No conversations yet</div>
+				{:else}
+					<div class="flex flex-col gap-2">
+						{#each conversations as conversation (conversation.id)}
+							<button
+								onclick={() => selectConversation(conversation.id)}
+								class="flex cursor-pointer items-center gap-3 rounded-[10px] px-3 py-3 text-left transition-all duration-200 hover:bg-white/8 {selectedConversationId ===
+								conversation.id
+									? 'bg-white/10'
+									: ''}"
 							>
-								Database Models Discussion
-							</div>
-							<div class="text-xs text-white/40">2 hours ago</div>
-						</div>
+								<div class="flex h-9 w-9 items-center justify-center rounded-lg bg-white/5 text-xl">
+									💬
+								</div>
+								<div class="min-w-0 flex-1">
+									<div
+										class="mb-1 overflow-hidden text-sm font-medium text-ellipsis whitespace-nowrap text-white/90"
+									>
+										{conversation.title || 'Untitled Conversation'}
+									</div>
+									<div class="text-xs text-white/40">
+										{formatDate(conversation.updatedAt || conversation.createdAt)}
+									</div>
+								</div>
+							</button>
+						{/each}
 					</div>
-					<div
-						class="flex cursor-pointer items-center gap-3 rounded-[10px] px-3 py-3 transition-all duration-200 hover:bg-white/8"
-					>
-						<div class="flex h-9 w-9 items-center justify-center rounded-lg bg-white/5 text-xl">
-							⚛️
-						</div>
-						<div class="min-w-0 flex-1">
-							<div
-								class="mb-1 overflow-hidden text-sm font-medium text-ellipsis whitespace-nowrap text-white/90"
-							>
-								React Component Help
-							</div>
-							<div class="text-xs text-white/40">Yesterday</div>
-						</div>
-					</div>
-					<div
-						class="flex cursor-pointer items-center gap-3 rounded-[10px] px-3 py-3 transition-all duration-200 hover:bg-white/8"
-					>
-						<div class="flex h-9 w-9 items-center justify-center rounded-lg bg-white/5 text-xl">
-							✉️
-						</div>
-						<div class="min-w-0 flex-1">
-							<div
-								class="mb-1 overflow-hidden text-sm font-medium text-ellipsis whitespace-nowrap text-white/90"
-							>
-								Email Writing
-							</div>
-							<div class="text-xs text-white/40">3 days ago</div>
-						</div>
-					</div>
-				</div>
+				{/if}
 			</div>
 		</div>
 
@@ -615,22 +638,16 @@
 				<div
 					class="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#ff6b35] to-[#f7931e] text-base font-semibold text-white shadow-[0_2px_8px_rgba(255,107,53,0.3)]"
 				>
-					<span>T</span>
+					<span>{userId.charAt(0).toUpperCase()}</span>
 				</div>
 				<div class="min-w-0 flex-1">
 					<div
 						class="mb-0.5 overflow-hidden text-sm font-semibold text-ellipsis whitespace-nowrap text-white"
 					>
-						Tushar
+						User {userId.substring(0, 8)}
 					</div>
-					<div class="text-xs text-white/50">Free Plan</div>
+					<div class="text-xs text-white/50">User ID</div>
 				</div>
-				<button
-					class="flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg border-none bg-transparent text-white/50 transition-all duration-200 hover:bg-white/10 hover:text-white/90"
-					title="Settings"
-				>
-					<Icon icon="mdi:cog" width="18" height="18" />
-				</button>
 			</div>
 		</div>
 	</aside>
@@ -639,7 +656,9 @@
 	<main class="relative flex h-screen flex-1 flex-col overflow-hidden">
 		{#if messages.length === 0}
 			<!-- Welcome Screen -->
-			<div class="relative flex h-full flex-col items-center justify-start px-8 pt-16 pb-1 text-center">
+			<div
+				class="relative flex h-full flex-col items-center justify-start px-8 pt-16 pb-1 text-center"
+			>
 				<div class="relative mb-12">
 					<div
 						class="relative z-10 animate-bounce text-[5rem] drop-shadow-[0_10px_30px_rgba(255,107,53,0.3)]"
@@ -655,69 +674,11 @@
 						class="m-0 mb-4 bg-gradient-to-br from-white to-white/70 bg-clip-text text-5xl font-extrabold text-transparent text-white"
 						style="letter-spacing: -0.03em;"
 					>
-						Welcome back, Tushar
+						Welcome to Dexterous AI
 					</h1>
 					<p class="m-0 text-xl leading-relaxed font-normal text-white/60">
-						I'm here to help you with anything you need. What would you like to explore today?
+						Select a conversation from the sidebar or start a new one to begin chatting.
 					</p>
-				</div>
-				<div class="grid w-full max-w-[600px] grid-cols-2 gap-4">
-					<button
-						class="flex cursor-pointer items-center gap-4 rounded-2xl border border-white/10 bg-white/5 p-5 text-left transition-all duration-300 hover:-translate-y-0.5 hover:border-[rgba(255,107,53,0.3)] hover:bg-white/8 hover:shadow-[0_8px_24px_rgba(0,0,0,0.2)]"
-						style="transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);"
-					>
-						<div
-							class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl bg-[rgba(255,107,53,0.1)] text-2xl"
-						>
-							💡
-						</div>
-						<div class="flex-1">
-							<div class="mb-1 text-[0.95rem] font-semibold text-white">Get Ideas</div>
-							<div class="text-xs text-white/50">Brainstorm and explore</div>
-						</div>
-					</button>
-					<button
-						class="flex cursor-pointer items-center gap-4 rounded-2xl border border-white/10 bg-white/5 p-5 text-left transition-all duration-300 hover:-translate-y-0.5 hover:border-[rgba(255,107,53,0.3)] hover:bg-white/8 hover:shadow-[0_8px_24px_rgba(0,0,0,0.2)]"
-						style="transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);"
-					>
-						<div
-							class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl bg-[rgba(255,107,53,0.1)] text-2xl"
-						>
-							📝
-						</div>
-						<div class="flex-1">
-							<div class="mb-1 text-[0.95rem] font-semibold text-white">Write Content</div>
-							<div class="text-xs text-white/50">Articles, emails, and more</div>
-						</div>
-					</button>
-					<button
-						class="flex cursor-pointer items-center gap-4 rounded-2xl border border-white/10 bg-white/5 p-5 text-left transition-all duration-300 hover:-translate-y-0.5 hover:border-[rgba(255,107,53,0.3)] hover:bg-white/8 hover:shadow-[0_8px_24px_rgba(0,0,0,0.2)]"
-						style="transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);"
-					>
-						<div
-							class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl bg-[rgba(255,107,53,0.1)] text-2xl"
-						>
-							💻
-						</div>
-						<div class="flex-1">
-							<div class="mb-1 text-[0.95rem] font-semibold text-white">Code Help</div>
-							<div class="text-xs text-white/50">Debug and optimize</div>
-						</div>
-					</button>
-					<button
-						class="flex cursor-pointer items-center gap-4 rounded-2xl border border-white/10 bg-white/5 p-5 text-left transition-all duration-300 hover:-translate-y-0.5 hover:border-[rgba(255,107,53,0.3)] hover:bg-white/8 hover:shadow-[0_8px_24px_rgba(0,0,0,0.2)]"
-						style="transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);"
-					>
-						<div
-							class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl bg-[rgba(255,107,53,0.1)] text-2xl"
-						>
-							🎓
-						</div>
-						<div class="flex-1">
-							<div class="mb-1 text-[0.95rem] font-semibold text-white">Learn</div>
-							<div class="text-xs text-white/50">Explain concepts</div>
-						</div>
-					</button>
 				</div>
 			</div>
 		{:else}
@@ -726,7 +687,7 @@
 				bind:this={chatContainer}
 				class="flex-1 overflow-x-hidden overflow-y-auto scroll-smooth px-8 py-8 pb-40"
 			>
-				{#each messages as message, index (message.id)}
+				{#each messages as message (message.id)}
 					<div
 						class="mb-6 flex animate-[fadeInUp_0.4s_ease-out] items-start gap-3 {message.Role ===
 						'User'
@@ -737,7 +698,7 @@
 							<div
 								class="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-[10px] bg-gradient-to-br from-[#ff6b35] to-[#f7931e] text-white shadow-[0_4px_12px_rgba(255,107,53,0.3)]"
 							>
-							<Icon icon="mdi:layers" width="20" height="20" />
+								<Icon icon="mdi:layers" width="20" height="20" />
 							</div>
 						{/if}
 						<div
@@ -802,13 +763,6 @@
 														<span class="text-xs text-white/80"
 															>{selectedRowsCount} row{selectedRowsCount !== 1 ? 's' : ''} selected</span
 														>
-														<button
-															class="rounded bg-red-500/80 px-2 py-1 text-xs text-white transition-colors hover:bg-red-500"
-															onclick={() => deleteSelectedItems(message.id, blockIndex)}
-															title="Delete selected rows"
-														>
-															Delete Selected
-														</button>
 													</div>
 												{/if}
 												<table class="min-w-full divide-y divide-white/10">
@@ -829,28 +783,13 @@
 																	title="Select all rows"
 																/>
 															</th>
-															{#each block.content.headers as header, colIndex}
+															{#each block.content.headers as header}
 																<th
-																	class="group/th relative px-4 py-3 text-left text-sm font-semibold tracking-wider text-white"
+																	class="px-4 py-3 text-left text-sm font-semibold tracking-wider text-white"
 																>
-																	<div class="flex items-center gap-2">
-																		<span>{@html parseInlineFormatting(header)}</span>
-																		{#if block.content.headers.length > 1}
-																			<button
-																				class="rounded bg-white/20 px-1.5 py-0.5 text-xs text-white/60 opacity-0 transition-opacity group-hover/th:opacity-100 hover:bg-red-500/80 hover:text-white"
-																				onclick={() =>
-																					deleteTableColumn(message.id, blockIndex, colIndex)}
-																				title="Delete column"
-																			>
-													<Icon icon="mdi:close" width="12" height="12" />
-																			</button>
-																		{/if}
-																	</div>
+																	{@html parseInlineFormatting(header)}
 																</th>
 															{/each}
-															<th
-																class="w-12 px-2 py-3 text-left text-sm font-semibold tracking-wider text-white"
-															></th>
 														</tr>
 													</thead>
 													<tbody class="divide-y divide-white/10 bg-white/5">
@@ -883,29 +822,32 @@
 																	/>
 																</td>
 																{#each row as cell}
-																	<td class="px-4 py-3 text-sm whitespace-nowrap text-white/90">
+																	<td class="px-4 py-3 text-sm text-white/90">
 																		{@html parseInlineFormatting(cell)}
 																	</td>
 																{/each}
-																<td class="px-2 py-3">
-																	<button
-																		class="rounded bg-white/10 px-2 py-1 text-xs text-white/60 opacity-0 transition-opacity group-hover/row:opacity-100 hover:bg-red-500/20 hover:text-red-400"
-																		onclick={() => deleteTableRow(message.id, blockIndex, rowIdx)}
-																		title="Delete row"
-																	>
-																		<Icon icon="mdi:close" width="14" height="14" />
-																	</button>
-																</td>
 															</tr>
 														{/each}
 													</tbody>
 												</table>
+												{#if selectedRowsCount > 0}
+													<div class="mt-3 flex justify-end">
+														<button
+															onclick={saveToLocalStorage}
+															class="flex items-center gap-2 rounded-lg bg-gradient-to-br from-[#ff6b35] to-[#f7931e] px-4 py-2 text-sm font-semibold text-white shadow-[0_4px_12px_rgba(255,107,53,0.3)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_6px_20px_rgba(255,107,53,0.4)]"
+															title="Store selected rows in local storage"
+														>
+															<Icon icon="mdi:database-plus" width="18" height="18" />
+															<span>Store in Database</span>
+														</button>
+													</div>
+												{/if}
 											</div>
 										{:else if block.type === 'checklist'}
 											<div class="my-3 space-y-2">
 												<ul class="space-y-2">
-													{#each block.content as item, itemIndex}
-														<li class="group/item flex items-start gap-3">
+													{#each block.content as item}
+														<li class="flex items-start gap-3">
 															<input
 																type="checkbox"
 																checked={item.checked}
@@ -919,13 +861,6 @@
 															>
 																{@html parseInlineFormatting(item.text)}
 															</span>
-															<button
-																class="ml-2 rounded bg-white/10 px-2 py-1 text-xs text-white/60 opacity-0 transition-opacity group-hover/item:opacity-100 hover:bg-red-500/20 hover:text-red-400"
-																onclick={() => deleteListItem(message.id, blockIndex, itemIndex)}
-																title="Delete item"
-															>
-																<Icon icon="mdi:close" width="14" height="14" />
-															</button>
 														</li>
 													{/each}
 												</ul>
@@ -933,22 +868,15 @@
 										{:else if block.type === 'list'}
 											<div class="my-3 space-y-2">
 												<ul class="space-y-2">
-													{#each block.content as item, itemIndex}
+													{#each block.content as item}
 														<li
-															class="group/item flex items-start gap-3"
+															class="flex items-start gap-3"
 															style="padding-left: {item.indent * 1.5}rem"
 														>
 															<span class="mt-1.5 text-[#ff6b35]">●</span>
 															<span class="flex-1 text-white/90"
 																>{@html parseInlineFormatting(item.text)}</span
 															>
-															<button
-																class="ml-2 rounded bg-white/10 px-2 py-1 text-xs text-white/60 opacity-0 transition-opacity group-hover/item:opacity-100 hover:bg-red-500/20 hover:text-red-400"
-																onclick={() => deleteListItem(message.id, blockIndex, itemIndex)}
-																title="Delete item"
-															>
-																<Icon icon="mdi:close" width="14" height="14" />
-															</button>
 														</li>
 													{/each}
 												</ul>
@@ -973,7 +901,7 @@
 							<div
 								class="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-[10px] border-2 border-white/20 bg-white/10 text-sm font-semibold text-white"
 							>
-								<span>T</span>
+								<span>{userId.charAt(0).toUpperCase()}</span>
 							</div>
 						{/if}
 					</div>
@@ -1023,7 +951,7 @@
 					onblur={() => (inputFocused = false)}
 					placeholder="Type your message here..."
 					class="flex-1 resize-none overflow-y-auto rounded-xl border-2 bg-white/5 px-4 py-3 text-[0.95rem] leading-[1.5] text-white transition-all duration-300 placeholder:text-white/40 {inputFocused
-						? 'border-[rgba(255,107,53,0.4)] bg-white/8 outline-none ring-2 ring-[rgba(255,107,53,0.2)]'
+						? 'border-[rgba(255,107,53,0.4)] bg-white/8 ring-2 ring-[rgba(255,107,53,0.2)] outline-none'
 						: 'border-white/10 outline-none'}"
 					style="min-height: 60px; max-height: 200px; line-height: 1.5; font-family: inherit;"
 					disabled={isLoading}
@@ -1098,25 +1026,5 @@
 	:global(textarea::placeholder) {
 		color: rgba(255, 255, 255, 0.4);
 		opacity: 1;
-	}
-
-	:global(textarea::-webkit-input-placeholder) {
-		color: rgba(255, 255, 255, 0.4);
-		opacity: 1;
-	}
-
-	:global(textarea::-moz-placeholder) {
-		color: rgba(255, 255, 255, 0.4);
-		opacity: 1;
-	}
-
-	:global(textarea:-ms-input-placeholder) {
-		color: rgba(255, 255, 255, 0.4);
-		opacity: 1;
-	}
-
-	:global(select option) {
-		background: #1a1a2e;
-		color: #ffffff;
 	}
 </style>

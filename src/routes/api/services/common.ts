@@ -25,3 +25,27 @@ export const post_ = async (url: string, bodyObj: any) => {
     throw error(500, { message: 'Internal Server Error' });
   }
 };
+
+export const get_ = async (url: string) => {
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+
+    console.log("Fetching from dexterous service backend", url);
+
+    const res = await fetch(url, {
+      method: 'GET',
+      headers,
+    });
+    const response = await res.json();
+    console.log("Response from dexterous service backend", JSON.stringify(response, null, 2));
+
+    if (!response.ok) {
+      console.error(`API Error: ${response.Message || response.statusText}`);
+      return response;
+    }
+    return response;
+  } catch (err) {
+    console.error(`Fetch Exception: ${err}`);
+    throw error(500, { message: 'Internal Server Error' });
+  }
+};
