@@ -791,13 +791,7 @@
 												blockIndex,
 												'table-rows'
 											)}
-											{@const selectedColsCount = getSelectedCount(
-												message.id,
-												blockIndex,
-												'table-columns'
-											)}
 											{@const totalRows = block.content.rows.length}
-											{@const totalCols = block.content.headers.length}
 											<div
 												class="group relative my-4 overflow-x-auto rounded-lg border border-white/20 shadow-sm"
 											>
@@ -840,24 +834,6 @@
 																	class="group/th relative px-4 py-3 text-left text-sm font-semibold tracking-wider text-white"
 																>
 																	<div class="flex items-center gap-2">
-																		<input
-																			type="checkbox"
-																			checked={isSelected(
-																				message.id,
-																				blockIndex,
-																				colIndex,
-																				'table-columns'
-																			)}
-																			on:change={() =>
-																				toggleSelection(
-																					message.id,
-																					blockIndex,
-																					colIndex,
-																					'table-columns'
-																				)}
-																			class="h-3.5 w-3.5 cursor-pointer rounded border-white/30 bg-white/20 text-[#ff6b35] focus:ring-1 focus:ring-white/50"
-																			title="Select column"
-																		/>
 																		<span>{@html parseInlineFormatting(header)}</span>
 																		{#if block.content.headers.length > 1}
 																			<button
@@ -924,69 +900,17 @@
 														{/each}
 													</tbody>
 												</table>
-												{#if selectedColsCount > 0}
-													<div class="absolute right-2 bottom-2 z-10">
-														<button
-															class="rounded bg-red-500/80 px-3 py-1.5 text-xs text-white transition-colors hover:bg-red-500"
-															on:click={() => deleteSelectedColumns(message.id, blockIndex)}
-															title="Delete selected columns"
-														>
-															Delete Selected Columns ({selectedColsCount})
-														</button>
-													</div>
-												{/if}
 											</div>
 										{:else if block.type === 'checklist'}
-											{@const selectedCount = getSelectedCount(message.id, blockIndex)}
-											{@const totalItems = block.content.length}
 											<div class="my-3 space-y-2">
-												{#if selectedCount > 0}
-													<div class="mb-2 flex items-center gap-2 border-b border-white/10 pb-2">
-														<span class="text-xs text-white/80">{selectedCount} selected</span>
-														<button
-															class="rounded bg-red-500/80 px-2 py-1 text-xs text-white transition-colors hover:bg-red-500"
-															on:click={() => deleteSelectedItems(message.id, blockIndex)}
-															title="Delete selected items"
-														>
-															Delete Selected
-														</button>
-													</div>
-												{/if}
-												<div class="mb-2 flex items-center gap-2">
-													<input
-														type="checkbox"
-														checked={selectedCount === totalItems && totalItems > 0}
-														on:change={() =>
-															toggleSelectAll(message.id, blockIndex, totalItems, 'checklist')}
-														class="h-4 w-4 cursor-pointer rounded border-white/30 bg-white/20 text-[#ff6b35] focus:ring-2 focus:ring-white/50"
-														title="Select all"
-													/>
-													<span class="text-xs text-white/60">Select all</span>
-												</div>
 												<ul class="space-y-2">
 													{#each block.content as item, itemIndex}
-														<li
-															class="group/item flex items-start gap-3 {isSelected(
-																message.id,
-																blockIndex,
-																itemIndex
-															)
-																? 'rounded bg-[#ff6b35]/10 px-2 py-1'
-																: ''}"
-														>
+														<li class="group/item flex items-start gap-3">
 															<input
 																type="checkbox"
 																checked={item.checked}
 																class="mt-1 h-4 w-4 rounded border-white/20 bg-white/10 text-[#ff6b35] focus:ring-2 focus:ring-[#ff6b35]"
 																disabled
-															/>
-															<input
-																type="checkbox"
-																checked={isSelected(message.id, blockIndex, itemIndex)}
-																on:change={() =>
-																	toggleSelection(message.id, blockIndex, itemIndex, 'checklist')}
-																class="mt-1 h-4 w-4 cursor-pointer rounded border-white/30 bg-white/20 text-[#ff6b35] focus:ring-2 focus:ring-white/50"
-																title="Select item"
 															/>
 															<span
 																class={item.checked
@@ -1007,52 +931,13 @@
 												</ul>
 											</div>
 										{:else if block.type === 'list'}
-											{@const selectedCount = getSelectedCount(message.id, blockIndex)}
-											{@const totalItems = block.content.length}
 											<div class="my-3 space-y-2">
-												{#if selectedCount > 0}
-													<div class="mb-2 flex items-center gap-2 border-b border-white/10 pb-2">
-														<span class="text-xs text-white/80">{selectedCount} selected</span>
-														<button
-															class="rounded bg-red-500/80 px-2 py-1 text-xs text-white transition-colors hover:bg-red-500"
-															on:click={() => deleteSelectedItems(message.id, blockIndex)}
-															title="Delete selected items"
-														>
-															Delete Selected
-														</button>
-													</div>
-												{/if}
-												<div class="mb-2 flex items-center gap-2">
-													<input
-														type="checkbox"
-														checked={selectedCount === totalItems && totalItems > 0}
-														on:change={() =>
-															toggleSelectAll(message.id, blockIndex, totalItems, 'list')}
-														class="h-4 w-4 cursor-pointer rounded border-white/30 bg-white/20 text-[#ff6b35] focus:ring-2 focus:ring-white/50"
-														title="Select all"
-													/>
-													<span class="text-xs text-white/60">Select all</span>
-												</div>
 												<ul class="space-y-2">
 													{#each block.content as item, itemIndex}
 														<li
-															class="group/item flex items-start gap-3 {isSelected(
-																message.id,
-																blockIndex,
-																itemIndex
-															)
-																? 'rounded bg-[#ff6b35]/10 px-2 py-1'
-																: ''}"
+															class="group/item flex items-start gap-3"
 															style="padding-left: {item.indent * 1.5}rem"
 														>
-															<input
-																type="checkbox"
-																checked={isSelected(message.id, blockIndex, itemIndex)}
-																on:change={() =>
-																	toggleSelection(message.id, blockIndex, itemIndex, 'list')}
-																class="mt-1.5 h-4 w-4 cursor-pointer rounded border-white/30 bg-white/20 text-[#ff6b35] focus:ring-2 focus:ring-white/50"
-																title="Select item"
-															/>
 															<span class="mt-1.5 text-[#ff6b35]">●</span>
 															<span class="flex-1 text-white/90"
 																>{@html parseInlineFormatting(item.text)}</span
