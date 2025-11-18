@@ -1,5 +1,6 @@
 <script lang="ts">
-    import type { Message } from '$lib/types/chat';
+    import type { Message } from '$lib/types/chat.ts';
+    import Icon from '@iconify/svelte';
   
     const CONVERSATION_ID = '98b6495b-01fe-445f-804e-c20e1d3ba2d0';
     const USER_ID = '74f22a5f-8ed2-45ce-af2e-ac4c32d824f4';
@@ -153,14 +154,10 @@
           >
             {#if sidebarOpen}
               <!-- collapse icon -->
-              <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-              </svg>
+              <Icon icon="mdi:chevron-right" class="w-5 h-5" />
             {:else}
               <!-- expand icon -->
-              <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
-              </svg>
+              <Icon icon="mdi:chevron-left" class="w-5 h-5" />
             {/if}
           </button>
   
@@ -183,9 +180,7 @@
             on:click={newChat}
             class="w-full flex items-center gap-3 px-3 py-3 rounded-lg bg-white/5 hover:bg-white/6 transition text-sm"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 text-white/80" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v14M5 12h14" />
-            </svg>
+            <Icon icon="mdi:plus" class="w-5 h-5 text-white/80" />
             {#if sidebarOpen}<span>New conversation</span>{/if}
           </button>
         </div>
@@ -260,9 +255,7 @@
             <div class="max-w-2xl text-center px-6">
               <div class="mb-6">
                 <div class="inline-flex items-center justify-center w-24 h-24 rounded-full bg-white/6 mx-auto">
-                  <svg xmlns="http://www.w3.org/2000/svg" class="w-10 h-10 text-white/90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M21 12c0 4.418-4.03 8-9 8s-9-3.582-9-8 4.03-8 9-8 9 3.582 9 8z" />
-                  </svg>
+                  <Icon icon="mdi:emoticon-happy" class="w-10 h-10 text-white/90" />
                 </div>
               </div>
   
@@ -291,9 +284,7 @@
                 {#if message.Role === 'Assistant'}
                   <!-- assistant avatar -->
                   <div class="flex-shrink-0 w-10 h-10 rounded-md bg-white/6 flex items-center justify-center">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 text-white/85" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5" />
-                    </svg>
+                    <Icon icon="mdi:layers" class="w-5 h-5 text-white/85" />
                   </div>
                 {/if}
   
@@ -319,9 +310,7 @@
             {#if isLoading}
               <div class="flex items-start gap-4">
                 <div class="flex-shrink-0 w-10 h-10 rounded-md bg-white/6 flex items-center justify-center">
-                  <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 text-white/85" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5" />
-                  </svg>
+                  <Icon icon="mdi:layers" class="w-5 h-5 text-white/85" />
                 </div>
   
                 <div>
@@ -346,9 +335,7 @@
           <div class="bg-gradient-to-b from-transparent to-transparent">
             <div class="flex items-end gap-3 bg-white/4 backdrop-blur-sm border border-white/6 rounded-3xl px-4 py-3">
               <button class="w-10 h-10 rounded-lg bg-transparent flex items-center justify-center hover:bg-white/6 transition" title="Attach">
-                <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21.44 11.05l-9.19 9.19a6 6 0 1 1-8.49-8.49l9.19-9.19a4 4 0 1 1 5.66 5.66L9.64 16.2" />
-                </svg>
+                <Icon icon="mdi:paperclip" class="w-5 h-5" />
               </button>
   
               <div class="flex-1">
@@ -381,10 +368,7 @@
                         {newMessageText.trim() && !isLoading ? 'bg-white text-[#0b0b0d] hover:scale-[1.03]' : 'bg-white/6 text-white/50 cursor-not-allowed'}"
                   title="Send"
                 >
-                  <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M22 2L11 13" />
-                    <path d="M22 2L15 22L11 13L2 9L22 2Z" />
-                  </svg>
+                  <Icon icon="mdi:send" class="w-5 h-5" />
                 </button>
               </div>
             </div>
