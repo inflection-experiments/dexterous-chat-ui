@@ -1,12 +1,70 @@
 <script lang="ts">
 	import type { Message } from '$lib/types/chat.ts';
 	import Icon from '@iconify/svelte';
+	import { parseMarkdown, parseTable, parseInlineFormatting } from '$lib/utils/markdownParser.ts';
 
 	// import type { Message } from '$lib/types/chat';
 
 	const CONVERSATION_ID = '98b6495b-01fe-445f-804e-c20e1d3ba2d0';
 	const USER_ID = '74f22a5f-8ed2-45ce-af2e-ac4c32d824f4';
 	const REFERENCE_MESSAGE_ID = '123e4567-e89b-12d3-a456-426655440000';
+
+	// Local storage key for this conversation
+	const STORAGE_KEY = `chat_conversation_${CONVERSATION_ID}`;
+
+	// Initialize conversation data in localStorage
+	function initializeConversationData() {
+		if (typeof window === 'undefined') return;
+		
+		const stored = localStorage.getItem(STORAGE_KEY);
+		if (!stored) {
+			const conversationData = {
+				conversationId: CONVERSATION_ID,
+				userId: USER_ID,
+				referenceMessageId: REFERENCE_MESSAGE_ID,
+				timestamp: new Date().toISOString(),
+				messages: []
+			};
+			localStorage.setItem(STORAGE_KEY, JSON.stringify(conversationData));
+		}
+	}
+
+	// Load conversation data from localStorage
+	function loadConversationData() {
+		if (typeof window === 'undefined') return null;
+		
+		try {
+			const stored = localStorage.getItem(STORAGE_KEY);
+			if (!stored) return null;
+			return JSON.parse(stored);
+		} catch (error) {
+			console.error('Error loading conversation data:', error);
+			return null;
+		}
+	}
+
+	// Save conversation data to localStorage
+	function saveConversationData(conversationData: any) {
+		if (typeof window === 'undefined') return;
+		
+		try {
+			conversationData.timestamp = new Date().toISOString();
+			localStorage.setItem(STORAGE_KEY, JSON.stringify(conversationData));
+		} catch (error) {
+			console.error('Error saving conversation data:', error);
+		}
+	}
+
+	// Initialize on component mount and load messages
+	$effect(() => {
+		initializeConversationData();
+		
+		// Load messages from localStorage if available
+		const conversationData = loadConversationData();
+		if (conversationData && conversationData.messages && conversationData.messages.length > 0) {
+			messages = conversationData.messages;
+		}
+	});
 
 	let messages = $state<Message[]>([]);
 	let newMessageText = $state('');
@@ -25,122 +83,6 @@
 	);
 
 	// Markdown parsing functions
-	function parseMarkdown(md: string) {
-		const lines = md.split('\n');
-		const result: any[] = [];
-		let i = 0;
-
-		while (i < lines.length) {
-			const line = lines[i];
-
-			// Code block
-			if (line.trim().startsWith('```')) {
-				const language = line.trim().substring(3);
-				const codeLines = [];
-				i++;
-				while (i < lines.length && !lines[i].trim().startsWith('```')) {
-					codeLines.push(lines[i]);
-					i++;
-				}
-				result.push({ type: 'code', language, content: codeLines.join('\n') });
-				i++;
-			}
-			// H1
-			else if (line.startsWith('# ')) {
-				result.push({ type: 'h1', content: line.substring(2) });
-				i++;
-			}
-			// H2
-			else if (line.startsWith('## ')) {
-				result.push({ type: 'h2', content: line.substring(3) });
-				i++;
-			}
-			// H3
-			else if (line.startsWith('### ')) {
-				result.push({ type: 'h3', content: line.substring(4) });
-				i++;
-			}
-			// HR
-			else if (line.trim() === '---') {
-				result.push({ type: 'hr' });
-				i++;
-			}
-			// Table
-			else if (line.includes('|') && line.trim().startsWith('|')) {
-				const tableLines = [];
-				while (i < lines.length && lines[i].includes('|')) {
-					tableLines.push(lines[i]);
-					i++;
-				}
-				result.push({ type: 'table', content: parseTable(tableLines) });
-			}
-			// Checkbox list
-			else if (line.trim().match(/^- \[[ x]\]/)) {
-				const listItems = [];
-				while (i < lines.length && lines[i].trim().match(/^- \[[ x]\]/)) {
-					const checked = lines[i].includes('[x]');
-					const text = lines[i].trim().substring(6);
-					listItems.push({ checked, text });
-					i++;
-				}
-				result.push({ type: 'checklist', content: listItems });
-			}
-			// Bullet list
-			else if (line.trim().startsWith('- ')) {
-				const listItems = [];
-				while (
-					i < lines.length &&
-					(lines[i].trim().startsWith('- ') || lines[i].trim().startsWith('  -'))
-				) {
-					const indent = lines[i].search(/\S/);
-					const text = lines[i].trim().substring(2);
-					listItems.push({ text, indent });
-					i++;
-				}
-				result.push({ type: 'list', content: listItems });
-			}
-			// Paragraph
-			else if (line.trim() !== '') {
-				result.push({ type: 'p', content: line });
-				i++;
-			}
-			// Empty line
-			else {
-				i++;
-			}
-		}
-
-		return result;
-	}
-
-	function parseTable(lines: string[]) {
-		if (lines.length < 2) return { headers: [], rows: [] };
-
-		const headers = lines[0]
-			.split('|')
-			.map((h) => h.trim())
-			.filter((h) => h !== '');
-
-		const rows = lines.slice(2).map((row) =>
-			row
-				.split('|')
-				.map((cell) => cell.trim())
-				.filter((cell) => cell !== '')
-		);
-
-		return { headers, rows };
-	}
-
-	function parseInlineFormatting(text: string) {
-		// Bold
-		text = text.replace(/\*\*(.*?)\*\*/g, '<strong class="font-semibold text-white">$1</strong>');
-		// Code
-		text = text.replace(
-			/`(.*?)`/g,
-			'<code class="bg-white/10 px-1.5 py-0.5 rounded text-sm font-mono text-[#ff6b35]">$1</code>'
-		);
-		return text;
-	}
 
 	// Reconstruct markdown from parsed blocks
 	function reconstructMarkdown(blocks: any[]): string {
@@ -416,6 +358,15 @@
 		const trimmedMessage = newMessageText.trim();
 		if (trimmedMessage === '' || isLoading) return;
 
+		// Get conversation data from localStorage
+		let conversationData = loadConversationData() || {
+			conversationId: CONVERSATION_ID,
+			userId: USER_ID,
+			referenceMessageId: REFERENCE_MESSAGE_ID,
+			timestamp: new Date().toISOString(),
+			messages: []
+		};
+
 		// Add user message to the UI
 		const userMessage: Message = {
 			id: Date.now(),
@@ -427,6 +378,9 @@
 		isLoading = true;
 		scrollToBottom();
 
+		// Use stored referenceMessageId or fallback to constant
+		const currentReferenceMessageId = conversationData.referenceMessageId || REFERENCE_MESSAGE_ID;
+
 		try {
 			// Send message to our SvelteKit backend
 			const response = await fetch('/api/server/chat', {
@@ -436,7 +390,7 @@
 					conversationId: CONVERSATION_ID,
 					message: trimmedMessage,
 					userId: USER_ID,
-					referenceMessageId: REFERENCE_MESSAGE_ID
+					referenceMessageId: currentReferenceMessageId
 				})
 			});
 
@@ -451,6 +405,12 @@
 						Role: 'Assistant'
 					};
 					messages = [...messages, assistantMessage];
+					
+					// Keep using the static referenceMessageId
+					conversationData.referenceMessageId = REFERENCE_MESSAGE_ID;
+					conversationData.messages = messages;
+					saveConversationData(conversationData);
+					
 					scrollToBottom();
 				}
 			} else {
@@ -461,6 +421,10 @@
 					Role: 'Assistant'
 				};
 				messages = [...messages, errorMessage];
+				
+				// Save messages even on error
+				conversationData.messages = messages;
+				saveConversationData(conversationData);
 			}
 		} catch (error) {
 			console.error('Error sending message:', error);
@@ -470,6 +434,10 @@
 				Role: 'Assistant'
 			};
 			messages = [...messages, errorMessage];
+			
+			// Save messages even on error
+			conversationData.messages = messages;
+			saveConversationData(conversationData);
 		} finally {
 			isLoading = false;
 		}
@@ -508,6 +476,19 @@
 	const newChat = () => {
 		messages = [];
 		newMessageText = '';
+		parsedMessageContent.clear();
+		selectionState.clear();
+		
+		// Reset conversation data in localStorage
+		const conversationData = {
+			conversationId: CONVERSATION_ID,
+			userId: USER_ID,
+			referenceMessageId: REFERENCE_MESSAGE_ID,
+			timestamp: new Date().toISOString(),
+			messages: []
+		};
+		saveConversationData(conversationData);
+		
 		if (inputElement) {
 			inputElement.style.height = 'auto';
 			setTimeout(() => {

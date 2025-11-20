@@ -1,12 +1,34 @@
 <script lang="ts">
 	import type { Message } from '$lib/types/chat.ts';
-	import type { Conversation } from '$lib/types/botTypes';
+	import type { Conversation } from '$lib/types/botTypes.ts';
 	import Icon from '@iconify/svelte';
-	import type { PageData } from './$types';
+	import type { PageData } from './$types.ts';
+	import {
+		parseMarkdown,
+		parseTable,
+		parseInlineFormatting,
+		reconstructMarkdown,
+		deleteTableRowFromBlocks,
+		deleteListItemFromBlocks
+	} from '$lib/utils/markdownParser.ts';
+	import {
+		loadFromLocalStorage,
+		saveToLocalStorage,
+		getConversationData,
+		saveConversationData,
+		addSelectedItems,
+		type SelectedItem
+	} from '$lib/utils/localStorage.ts';
 
 	let { data }: { data: PageData } = $props();
 
 	const userId = data.userId;
+	
+	// Static IDs from chat/+page.svelte
+	const CONVERSATION_ID = '98b6495b-01fe-445f-804e-c20e1d3ba2d0';
+	const USER_ID = '74f22a5f-8ed2-45ce-af2e-ac4c32d824f4';
+	const REFERENCE_MESSAGE_ID = '123e4567-e89b-12d3-a456-426655440000';
+	
 	let conversations = $state<Conversation[]>(data.conversations || []);
 	let selectedConversationId = $state<string | null>(null);
 	let messages = $state<Message[]>([]);
@@ -21,7 +43,7 @@
 	// Store parsed content for each message to enable editing
 	let parsedMessageContent = $state(new Map<number | string, any[]>());
 
-	// Store selection state for each message
+	// Store selection state for table rows
 	let selectionState = $state(
 		new Map<number | string, Map<number, { type: string; selected: Set<number> }>>()
 	);
@@ -29,19 +51,16 @@
 	// Local storage key
 	const STORAGE_KEY = `dexterous_conversations_${userId}`;
 
-	// Local storage functions
-	function saveToLocalStorage() {
+	// Save selected table rows to local storage
+	function saveSelectedRowsToStorage() {
 		if (!selectedConversationId) {
 			alert('Please start a conversation first');
 			return;
 		}
 
 		try {
-			const stored = localStorage.getItem(STORAGE_KEY);
-			const allStored: any = stored ? JSON.parse(stored) : {};
-
 			// Get all selected items from all tables
-			const newSelectedItems: any[] = [];
+			const newSelectedItems: SelectedItem[] = [];
 
 			// Collect all selected table rows from all messages
 			selectionState.forEach((messageSelections, messageId) => {
@@ -72,53 +91,12 @@
 				return;
 			}
 
-			// Get existing data for this conversation or create new
-			const existingData = allStored[selectedConversationId] || {
-				conversationId: selectedConversationId,
-				userId: userId,
-				timestamp: new Date().toISOString(),
-				selectedItems: []
-			};
-
-			// Merge new selections with existing ones (avoid duplicates)
-			const existingItemKeys = new Set(
-				existingData.selectedItems.map((item: any) => `${item.messageId}-${item.blockIndex}`)
-			);
-
-			// Add only new items that don't already exist
-			newSelectedItems.forEach((item) => {
-				const key = `${item.messageId}-${item.blockIndex}`;
-				if (!existingItemKeys.has(key)) {
-					existingData.selectedItems.push(item);
-				} else {
-					// Update existing item with new selections
-					const existingItem = existingData.selectedItems.find(
-						(existing: any) => `${existing.messageId}-${existing.blockIndex}` === key
-					);
-					if (existingItem) {
-						// Merge selected rows
-						const existingRowIndices = new Set(
-							existingItem.selectedRows.map((r: any) => r.rowIndex)
-						);
-						item.selectedRows.forEach((row: any) => {
-							if (!existingRowIndices.has(row.rowIndex)) {
-								existingItem.selectedRows.push(row);
-							}
-						});
-					}
-				}
-			});
-
-			// Update timestamp
-			existingData.timestamp = new Date().toISOString();
-
-			// Store by conversation ID
-			allStored[selectedConversationId] = existingData;
-			localStorage.setItem(STORAGE_KEY, JSON.stringify(allStored));
+			// Save to local storage using utility function
+			addSelectedItems(STORAGE_KEY, selectedConversationId, newSelectedItems);
 
 			// Count total rows stored
-			const totalRows = existingData.selectedItems.reduce(
-				(sum: number, item: any) => sum + item.selectedRows.length,
+			const totalRows = newSelectedItems.reduce(
+				(sum: number, item) => sum + (item.selectedRows?.length || 0),
 				0
 			);
 
@@ -142,19 +120,7 @@
 		}
 	}
 
-	function loadFromLocalStorage() {
-		try {
-			const stored = localStorage.getItem(STORAGE_KEY);
-			if (!stored) return null;
-
-			return JSON.parse(stored);
-		} catch (error) {
-			console.error('Error loading from local storage:', error);
-			return null;
-		}
-	}
-
-	// Selection management functions
+	// Selection management functions for table rows
 	function getSelectionState(messageId: number | string, blockIndex: number, itemType: string) {
 		if (!selectionState.has(messageId)) {
 			selectionState.set(messageId, new Map());
@@ -226,6 +192,42 @@
 		return state.selected.size ?? 0;
 	}
 
+	// Update message content after editing
+	function updateMessageContent(messageId: number | string) {
+		const parsed = parsedMessageContent.get(messageId);
+		if (parsed) {
+			const newContent = reconstructMarkdown(parsed);
+			messages = messages.map((msg) =>
+				msg.id === messageId ? { ...msg, Content: newContent } : msg
+			);
+			// Update the parsed content map with the modified parsed blocks
+			parsedMessageContent.set(messageId, [...parsed]);
+		}
+	}
+
+	// Delete table row
+	function deleteTableRow(messageId: number | string, blockIndex: number, rowIndex: number) {
+		const parsed = parsedMessageContent.get(messageId);
+		if (parsed && parsed[blockIndex]?.type === 'table') {
+			const newParsed = deleteTableRowFromBlocks(parsed, blockIndex, rowIndex);
+			parsedMessageContent.set(messageId, newParsed);
+			updateMessageContent(messageId);
+		}
+	}
+
+	// Delete list item
+	function deleteListItem(messageId: number | string, blockIndex: number, itemIndex: number) {
+		const parsed = parsedMessageContent.get(messageId);
+		if (
+			parsed &&
+			(parsed[blockIndex]?.type === 'list' || parsed[blockIndex]?.type === 'checklist')
+		) {
+			const newParsed = deleteListItemFromBlocks(parsed, blockIndex, itemIndex);
+			parsedMessageContent.set(messageId, newParsed);
+			updateMessageContent(messageId);
+		}
+	}
+
 	// Format date for display
 	function formatDate(dateString: string): string {
 		const date = new Date(dateString);
@@ -242,53 +244,6 @@
 		return date.toLocaleDateString();
 	}
 
-	// Load conversations
-	async function loadConversations() {
-		loadingConversations = true;
-		try {
-			// Load from API
-			const response = await fetch(`/api/server/conversations?userId=${userId}`);
-			const result = await response.json();
-			const apiConversations = result.conversations || [];
-
-			// Load from local storage
-			const storedData = loadFromLocalStorage();
-
-			// Merge conversations (prioritize API, but include stored data)
-			const conversationMap = new Map<string, Conversation>();
-
-			// Add API conversations
-			apiConversations.forEach((conv: Conversation) => {
-				conversationMap.set(conv.id, conv);
-			});
-
-			// Add stored conversations that aren't in API
-			if (storedData) {
-				Object.keys(storedData).forEach((convId) => {
-					if (!conversationMap.has(convId)) {
-						// Create a conversation object from stored data
-						const stored = storedData[convId];
-						conversationMap.set(convId, {
-							id: convId,
-							userId: stored.userId || userId,
-							botId: 'dexterous',
-							title: `Stored Conversation (${new Date(stored.timestamp).toLocaleDateString()})`,
-							createdAt: stored.timestamp,
-							updatedAt: stored.timestamp,
-							status: 'active'
-						});
-					}
-				});
-			}
-
-			conversations = Array.from(conversationMap.values());
-		} catch (error) {
-			console.error('Error loading conversations:', error);
-		} finally {
-			loadingConversations = false;
-		}
-	}
-
 	// Select a conversation and load its messages
 	async function selectConversation(conversationId: string) {
 		selectedConversationId = conversationId;
@@ -297,130 +252,103 @@
 		selectionState.clear();
 
 		try {
-			// Load messages from API
-			const response = await fetch(
-				`/api/server/conversations/${conversationId}/messages?userId=${userId}`
-			);
+			// Load messages from API via server endpoint
+			const response = await fetch(`/api/server/conversations/${conversationId}/messages`);
+			
 			if (response.ok) {
 				const result = await response.json();
-				// Transform backend messages to Message format
-				if (result.messages && Array.isArray(result.messages)) {
-					messages = result.messages.map((msg: any) => ({
-						id: msg.id || msg.Id,
-						Content: msg.content || msg.Content || msg.message || msg.Message || '',
-						Role: (msg.role || msg.Role || 'User') === 'user' ? 'User' : 'Assistant'
-					}));
+				const apiMessages = result.messages || [];
+				
+				if (Array.isArray(apiMessages) && apiMessages.length > 0) {
+					messages = apiMessages;
+					console.log('Loaded messages from API:', messages.length);
+
+					// Parse markdown for all loaded messages
+					messages.forEach((msg) => {
+						if (msg.Role === 'Assistant' && msg.Content) {
+							parsedMessageContent.set(msg.id, parseMarkdown(msg.Content));
+						}
+					});
+
+					// Save messages to local storage
+					const conversationData = getConversationData(STORAGE_KEY, conversationId) || {
+						conversationId,
+						userId: USER_ID,
+						referenceMessageId: REFERENCE_MESSAGE_ID,
+						timestamp: new Date().toISOString(),
+						messages: [],
+						selectedItems: []
+					};
+					conversationData.messages = messages;
+					saveConversationData(STORAGE_KEY, conversationId, conversationData);
+				} else {
+					// Try loading from local storage if API returns empty
+					const storedData = loadFromLocalStorage(STORAGE_KEY);
+					if (storedData && storedData[conversationId] && storedData[conversationId].messages) {
+						const storedMessages = storedData[conversationId].messages;
+						if (Array.isArray(storedMessages) && storedMessages.length > 0) {
+							messages = storedMessages;
+							console.log('Loaded messages from local storage:', messages.length);
+							
+							// Parse markdown for all loaded messages
+							messages.forEach((msg) => {
+								if (msg.Role === 'Assistant' && msg.Content) {
+									parsedMessageContent.set(msg.id, parseMarkdown(msg.Content));
+								}
+							});
+						}
+					}
+				}
+			} else {
+				// Try loading from local storage if API returns empty
+				const storedData = loadFromLocalStorage(STORAGE_KEY);
+				if (storedData && storedData[conversationId] && storedData[conversationId].messages) {
+					const storedMessages = storedData[conversationId].messages;
+					if (Array.isArray(storedMessages) && storedMessages.length > 0) {
+						messages = storedMessages;
+						console.log('Loaded messages from local storage:', messages.length);
+						
+						// Parse markdown for all loaded messages
+						messages.forEach((msg) => {
+							if (msg.Role === 'Assistant' && msg.Content) {
+								parsedMessageContent.set(msg.id, parseMarkdown(msg.Content));
+							}
+						});
+					}
 				}
 			}
 
-			// Also check local storage for stored data
-			const storedData = loadFromLocalStorage();
-			if (storedData && storedData[conversationId]) {
-				// Stored data is available but we keep API messages as primary
-				// The stored selections are available when user selects table rows
-				console.log('Stored data available for conversation:', storedData[conversationId]);
-			}
-
+			// Scroll to bottom after messages are loaded and rendered
+			await new Promise(resolve => setTimeout(resolve, 100));
 			scrollToBottom();
 		} catch (error) {
 			console.error('Error loading conversation messages:', error);
-		}
-	}
-
-	// Markdown parsing functions (same as chat page)
-	function parseMarkdown(md: string) {
-		const lines = md.split('\n');
-		const result: any[] = [];
-		let i = 0;
-
-		while (i < lines.length) {
-			const line = lines[i];
-
-			if (line.trim().startsWith('```')) {
-				const language = line.trim().substring(3);
-				const codeLines = [];
-				i++;
-				while (i < lines.length && !lines[i].trim().startsWith('```')) {
-					codeLines.push(lines[i]);
-					i++;
+			// Fallback to local storage
+			const storedData = loadFromLocalStorage(STORAGE_KEY);
+			if (storedData && storedData[conversationId] && storedData[conversationId].messages) {
+				const storedMessages = storedData[conversationId].messages;
+				if (Array.isArray(storedMessages) && storedMessages.length > 0) {
+					messages = storedMessages;
+					console.log('Loaded messages from local storage (fallback):', messages.length);
+					
+					// Parse markdown for all loaded messages
+					messages.forEach((msg) => {
+						if (msg.Role === 'Assistant' && msg.Content) {
+							parsedMessageContent.set(msg.id, parseMarkdown(msg.Content));
+						}
+					});
+					
+					// Scroll to bottom after messages are loaded
+					await new Promise(resolve => setTimeout(resolve, 100));
+					scrollToBottom();
 				}
-				result.push({ type: 'code', language, content: codeLines.join('\n') });
-				i++;
-			} else if (line.startsWith('# ')) {
-				result.push({ type: 'h1', content: line.substring(2) });
-				i++;
-			} else if (line.startsWith('## ')) {
-				result.push({ type: 'h2', content: line.substring(3) });
-				i++;
-			} else if (line.startsWith('### ')) {
-				result.push({ type: 'h3', content: line.substring(4) });
-				i++;
-			} else if (line.trim() === '---') {
-				result.push({ type: 'hr' });
-				i++;
-			} else if (line.includes('|') && line.trim().startsWith('|')) {
-				const tableLines = [];
-				while (i < lines.length && lines[i].includes('|')) {
-					tableLines.push(lines[i]);
-					i++;
-				}
-				result.push({ type: 'table', content: parseTable(tableLines) });
-			} else if (line.trim().match(/^- \[[ x]\]/)) {
-				const listItems = [];
-				while (i < lines.length && lines[i].trim().match(/^- \[[ x]\]/)) {
-					const checked = lines[i].includes('[x]');
-					const text = lines[i].trim().substring(6);
-					listItems.push({ checked, text });
-					i++;
-				}
-				result.push({ type: 'checklist', content: listItems });
-			} else if (line.trim().startsWith('- ')) {
-				const listItems = [];
-				while (
-					i < lines.length &&
-					(lines[i].trim().startsWith('- ') || lines[i].trim().startsWith('  -'))
-				) {
-					const indent = lines[i].search(/\S/);
-					const text = lines[i].trim().substring(2);
-					listItems.push({ text, indent });
-					i++;
-				}
-				result.push({ type: 'list', content: listItems });
-			} else if (line.trim() !== '') {
-				result.push({ type: 'p', content: line });
-				i++;
-			} else {
-				i++;
 			}
 		}
-
-		return result;
 	}
 
-	function parseTable(lines: string[]) {
-		if (lines.length < 2) return { headers: [], rows: [] };
-		const headers = lines[0]
-			.split('|')
-			.map((h) => h.trim())
-			.filter((h) => h !== '');
-		const rows = lines.slice(2).map((row) =>
-			row
-				.split('|')
-				.map((cell) => cell.trim())
-				.filter((cell) => cell !== '')
-		);
-		return { headers, rows };
-	}
 
-	function parseInlineFormatting(text: string) {
-		text = text.replace(/\*\*(.*?)\*\*/g, '<strong class="font-semibold text-white">$1</strong>');
-		text = text.replace(
-			/`(.*?)`/g,
-			'<code class="bg-white/10 px-1.5 py-0.5 rounded text-sm font-mono text-[#ff6b35]">$1</code>'
-		);
-		return text;
-	}
 
+	// Get parsed content for a message (caches parsed markdown)
 	function getParsedContent(messageId: number | string, content: string): any[] {
 		if (!parsedMessageContent.has(messageId)) {
 			parsedMessageContent.set(messageId, parseMarkdown(content));
@@ -430,12 +358,16 @@
 
 	const scrollToBottom = () => {
 		if (chatContainer) {
-			setTimeout(() => {
-				chatContainer.scrollTo({
-					top: chatContainer.scrollHeight,
-					behavior: 'smooth'
-				});
-			}, 100);
+			const el = chatContainer;
+			// Use requestAnimationFrame to ensure DOM is updated
+			requestAnimationFrame(() => {
+				setTimeout(() => {
+					el.scrollTo({
+						top: el.scrollHeight,
+						behavior: 'smooth'
+					});
+				}, 50);
+			});
 		}
 	};
 
@@ -445,8 +377,8 @@
 
 		// Create new conversation if none selected
 		if (!selectedConversationId) {
-			// Generate a new conversation ID
-			selectedConversationId = `conv-${userId}-${Date.now()}`;
+			// Use static conversation ID
+			selectedConversationId = CONVERSATION_ID;
 		}
 
 		const userMessage: Message = {
@@ -459,19 +391,41 @@
 		isLoading = true;
 		scrollToBottom();
 
-		const CONVERSATION_ID = '98b6495b-01fe-445f-804e-c20e1d3ba2d0';
-		const USER_ID = '74f22a5f-8ed2-45ce-af2e-ac4c32d824f4';
-		const REFERENCE_MESSAGE_ID = '123e4567-e89b-12d3-a456-426655440000';
+		// Get or create conversation metadata from localStorage
+		let conversationData = getConversationData(STORAGE_KEY, selectedConversationId);
+		if (!conversationData) {
+			// Create new conversation data
+			conversationData = {
+				conversationId: CONVERSATION_ID,
+				userId: USER_ID,
+				referenceMessageId: REFERENCE_MESSAGE_ID,
+				timestamp: new Date().toISOString(),
+				messages: [],
+				selectedItems: []
+			};
+		}
+		
+		// Save user message to local storage
+		if (!conversationData.messages) {
+			conversationData.messages = [];
+		}
+		conversationData.messages = [...conversationData.messages, userMessage];
+		saveConversationData(STORAGE_KEY, selectedConversationId, conversationData);
+
+		// Use static IDs
+		const CURRENT_CONVERSATION_ID = conversationData.conversationId || CONVERSATION_ID;
+		const CURRENT_USER_ID = conversationData.userId || USER_ID;
+		const CURRENT_REFERENCE_MESSAGE_ID = conversationData.referenceMessageId || REFERENCE_MESSAGE_ID;
 
 		try {
 			const response = await fetch('/api/server/chat', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
-					conversationId: CONVERSATION_ID,
+					conversationId: CURRENT_CONVERSATION_ID,
 					message: trimmedMessage,
-					userId: USER_ID,
-					referenceMessageId: REFERENCE_MESSAGE_ID
+					userId: CURRENT_USER_ID,
+					referenceMessageId: CURRENT_REFERENCE_MESSAGE_ID
 				})
 			});
 
@@ -485,9 +439,18 @@
 						Role: 'Assistant'
 					};
 					messages = [...messages, assistantMessage];
+					
+					// Save assistant message to local storage
+					if (!conversationData.messages) {
+						conversationData.messages = [];
+					}
+					conversationData.messages = [...conversationData.messages, assistantMessage];
+					
+					// Keep using the static referenceMessageId
+					conversationData.referenceMessageId = REFERENCE_MESSAGE_ID;
+					saveConversationData(STORAGE_KEY, selectedConversationId, conversationData);
+					
 					scrollToBottom();
-					// Reload conversations to update the list
-					await loadConversations();
 				}
 			} else {
 				console.error('Failed to send message:', response.statusText);
@@ -497,6 +460,16 @@
 					Role: 'Assistant'
 				};
 				messages = [...messages, errorMessage];
+				
+				// Save error message to local storage
+				let conversationData = getConversationData(STORAGE_KEY, selectedConversationId);
+				if (conversationData) {
+					if (!conversationData.messages) {
+						conversationData.messages = [];
+					}
+					conversationData.messages = [...conversationData.messages, errorMessage];
+					saveConversationData(STORAGE_KEY, selectedConversationId, conversationData);
+				}
 			}
 		} catch (error) {
 			console.error('Error sending message:', error);
@@ -506,6 +479,16 @@
 				Role: 'Assistant'
 			};
 			messages = [...messages, errorMessage];
+			
+			// Save error message to local storage
+			let conversationData = getConversationData(STORAGE_KEY, selectedConversationId);
+			if (conversationData) {
+				if (!conversationData.messages) {
+					conversationData.messages = [];
+				}
+				conversationData.messages = [...conversationData.messages, errorMessage];
+				saveConversationData(STORAGE_KEY, selectedConversationId, conversationData);
+			}
 		} finally {
 			isLoading = false;
 		}
@@ -532,6 +515,16 @@
 		}
 	});
 
+	// Auto-scroll to bottom when messages change (e.g., when selecting a conversation)
+	$effect(() => {
+		if (messages.length > 0) {
+			// Wait for DOM to update, then scroll
+			setTimeout(() => {
+				scrollToBottom();
+			}, 150);
+		}
+	});
+
 	const newChat = () => {
 		selectedConversationId = null;
 		messages = [];
@@ -554,7 +547,7 @@
 				inputElement.style.height = '60px';
 			}
 		}, 0);
-		loadConversations();
+		// loadConversations();
 	});
 </script>
 
@@ -606,7 +599,7 @@
 						{#each conversations as conversation (conversation.id)}
 							<button
 								onclick={() => selectConversation(conversation.id)}
-								class="flex cursor-pointer items-center gap-3 rounded-[10px] px-3 py-3 text-left transition-all duration-200 hover:bg-white/8 {selectedConversationId ===
+								class="flex w-full cursor-pointer items-center gap-3 rounded-[10px] px-3 py-3 text-left transition-all duration-200 hover:bg-white/8 {selectedConversationId ===
 								conversation.id
 									? 'bg-white/10'
 									: ''}"
@@ -790,6 +783,7 @@
 																	{@html parseInlineFormatting(header)}
 																</th>
 															{/each}
+															<th class="w-12 px-2 py-3"></th>
 														</tr>
 													</thead>
 													<tbody class="divide-y divide-white/10 bg-white/5">
@@ -826,19 +820,28 @@
 																		{@html parseInlineFormatting(cell)}
 																	</td>
 																{/each}
+																<td class="px-2 py-3">
+																	<button
+																		class="rounded bg-white/10 px-2 py-1 text-xs text-white/60 opacity-0 transition-opacity group-hover/row:opacity-100 hover:bg-red-500/20 hover:text-red-400"
+																		onclick={() => deleteTableRow(message.id, blockIndex, rowIdx)}
+																		title="Delete row"
+																	>
+																		<Icon icon="mdi:close" width="14" height="14" />
+																	</button>
+																</td>
 															</tr>
 														{/each}
 													</tbody>
 												</table>
 												{#if selectedRowsCount > 0}
-													<div class="mt-3 flex justify-end">
+													<div class="mt-3 flex justify-end px-4 pb-4">
 														<button
-															onclick={saveToLocalStorage}
+															onclick={saveSelectedRowsToStorage}
 															class="flex items-center gap-2 rounded-lg bg-gradient-to-br from-[#ff6b35] to-[#f7931e] px-4 py-2 text-sm font-semibold text-white shadow-[0_4px_12px_rgba(255,107,53,0.3)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_6px_20px_rgba(255,107,53,0.4)]"
-															title="Store selected rows in local storage"
+															title="Save selected rows to local storage"
 														>
 															<Icon icon="mdi:database-plus" width="18" height="18" />
-															<span>Store in Database</span>
+															<span>Save to Database</span>
 														</button>
 													</div>
 												{/if}
@@ -846,8 +849,8 @@
 										{:else if block.type === 'checklist'}
 											<div class="my-3 space-y-2">
 												<ul class="space-y-2">
-													{#each block.content as item}
-														<li class="flex items-start gap-3">
+													{#each block.content as item, itemIndex}
+														<li class="group/item flex items-start gap-3">
 															<input
 																type="checkbox"
 																checked={item.checked}
@@ -861,6 +864,13 @@
 															>
 																{@html parseInlineFormatting(item.text)}
 															</span>
+															<button
+																class="ml-2 rounded bg-white/10 px-2 py-1 text-xs text-white/60 opacity-0 transition-opacity group-hover/item:opacity-100 hover:bg-red-500/20 hover:text-red-400"
+																onclick={() => deleteListItem(message.id, blockIndex, itemIndex)}
+																title="Delete item"
+															>
+																<Icon icon="mdi:close" width="14" height="14" />
+															</button>
 														</li>
 													{/each}
 												</ul>
@@ -868,15 +878,22 @@
 										{:else if block.type === 'list'}
 											<div class="my-3 space-y-2">
 												<ul class="space-y-2">
-													{#each block.content as item}
+													{#each block.content as item, itemIndex}
 														<li
-															class="flex items-start gap-3"
+															class="group/item flex items-start gap-3"
 															style="padding-left: {item.indent * 1.5}rem"
 														>
 															<span class="mt-1.5 text-[#ff6b35]">●</span>
 															<span class="flex-1 text-white/90"
 																>{@html parseInlineFormatting(item.text)}</span
 															>
+															<button
+																class="ml-2 rounded bg-white/10 px-2 py-1 text-xs text-white/60 opacity-0 transition-opacity group-hover/item:opacity-100 hover:bg-red-500/20 hover:text-red-400"
+																onclick={() => deleteListItem(message.id, blockIndex, itemIndex)}
+																title="Delete item"
+															>
+																<Icon icon="mdi:close" width="14" height="14" />
+															</button>
 														</li>
 													{/each}
 												</ul>
