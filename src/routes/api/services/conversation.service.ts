@@ -1,4 +1,4 @@
-import { get_, post_, post__ } from './common';
+import { get_, post_, post__, delete_ } from './common';
 import { BACKEND_API_URL } from '$env/static/private';
 import type { Conversation } from '$lib/types/botTypes';
 
@@ -90,6 +90,17 @@ export const createConversation = async (projectId: string, userId: string): Pro
 		return response;
 	} catch (error) {
 		console.error('Error in createConversation:', error);
+		throw error;
+	}
+};
+
+export const deleteConversation = async (conversationId: string): Promise<any> => {
+	try {
+		const url = `${BACKEND_API_URL}/dexterous/chat/conversations/${conversationId}`;
+		const response = await delete_(url);
+		return response;
+	} catch (error) {
+		console.error('Error in deleteConversation:', error);
 		throw error;
 	}
 };

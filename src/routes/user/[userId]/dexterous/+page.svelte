@@ -2,7 +2,7 @@
 	import type { Message } from '$lib/types/chat.ts';
 	import type { Conversation } from '$lib/types/botTypes.ts';
 	import Icon from '@iconify/svelte';
-	import type { PageData } from './$types.ts';
+	import type { PageServerData } from './$types.ts';
 	import {
 		parseMarkdown,
 		parseTable,
@@ -19,8 +19,9 @@
 		addSelectedItems,
 		type SelectedItem
 	} from '$lib/utils/localStorage.ts';
+	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 
-	let { data }: { data: PageData } = $props();
+	let { data }: { data: PageServerData } = $props();
 
 	const userId = data.userId;
 	
@@ -56,7 +57,7 @@
 			conversationsInitialized = true;
 		}
 	});
-	let selectedConversationId = $state<string>('');
+	let selectedConversationId = $state();
 	let messages = $state<Message[]>([]);
 	let newMessageText = $state('');
 	let chatContainer = $state<HTMLElement | null>(null);
@@ -65,6 +66,9 @@
 	let sidebarOpen = $state(true);
 	let inputFocused = $state(false);
 	let loadingConversations = $state(false);
+	let showDeleteConfirm = $state(false);
+	let conversationToDelete = $state<string | null>(null);
+	let deletingConversation = $state(false);
 
 	// Store parsed content for each message to enable editing
 	let parsedMessageContent = $state(new Map<number | string, any[]>());
@@ -118,7 +122,7 @@
 			}
 
 			// Save to local storage using utility function
-			addSelectedItems(STORAGE_KEY, selectedConversationId, newSelectedItems);
+			addSelectedItems(STORAGE_KEY, selectedConversationId as string, newSelectedItems);
 
 			// Count total rows stored
 			const totalRows = newSelectedItems.reduce(
@@ -260,6 +264,38 @@
 		
 		try {
 			if (button.action === 'confirm') {
+				// Save the assistant message to local storage when user confirms
+				if (selectedConversationId) {
+					let conversationData = getConversationData(STORAGE_KEY, selectedConversationId as string);
+					if (!conversationData) {
+						conversationData = {
+							conversationId: selectedConversationId as string,
+							userId: userId,
+							referenceMessageId: REFERENCE_MESSAGE_ID,
+							timestamp: new Date().toISOString(),
+							messages: [],
+							selectedItems: []
+						};
+					}
+					
+					// Find the assistant message by messageId
+					const assistantMessage = messages.find(msg => msg.id === messageId);
+					if (assistantMessage && assistantMessage.Role === 'Assistant') {
+						if (!conversationData.messages) {
+							conversationData.messages = [];
+						}
+						
+						// Check if message already exists to avoid duplicates
+						const messageExists = conversationData.messages.some((msg: Message) => msg.id === messageId);
+						if (!messageExists) {
+							conversationData.messages = [...conversationData.messages, assistantMessage];
+							conversationData.referenceMessageId = REFERENCE_MESSAGE_ID;
+							saveConversationData(STORAGE_KEY, selectedConversationId as string, conversationData);
+							console.log('Assistant message saved to local storage after user confirmation');
+						}
+					}
+				}
+				
 				// Handle confirm action
 				if (button.operation === 'save' && button.payload) {
 					try {
@@ -637,23 +673,23 @@
 		scrollToBottom();
 
 		// Get or create conversation metadata from localStorage
-		// let conversationData = getConversationData(STORAGE_KEY, selectedConversationId);
-		// if (!conversationData) {
-		// 	// Create new conversation data using the selected conversation ID
-		// 	conversationData = {
-		// 		conversationId: selectedConversationId, // Use the currently selected conversation ID
-		// 		userId: USER_ID,
-		// 		referenceMessageId: REFERENCE_MESSAGE_ID,
-		// 		timestamp: new Date().toISOString(),
-		// 		messages: [],
-		// 		selectedItems: []
-		// 	};
-		// } else {
-		// 	// Ensure conversationId is set to the selected one
-		// 	conversationData.conversationId = selectedConversationId;
-		// }
+		let conversationData = getConversationData(STORAGE_KEY, selectedConversationId as string);
+		if (!conversationData) {
+			// Create new conversation data using the selected conversation ID
+			conversationData = {
+				conversationId: selectedConversationId as string, // Use the currently selected conversation ID
+				userId: USER_ID,
+				referenceMessageId: REFERENCE_MESSAGE_ID,
+				timestamp: new Date().toISOString(),
+				messages: [],
+				selectedItems: []
+			};
+		} else {
+			// Ensure conversationId is set to the selected one
+			conversationData.conversationId = selectedConversationId as string;
+		}
 		
-		// // Save user message to local storage
+		// Save user message to local storage (commented as requested)
 		// if (!conversationData.messages) {
 		// 	conversationData.messages = [];
 		// }
@@ -714,15 +750,8 @@
 					// Parse markdown for assistant message
 					parsedMessageContent.set(assistantMessage.id, parseMarkdown(assistantContent));
 					
-					// Save assistant message to local storage
-					// if (!conversationData.messages) {
-					// 	conversationData.messages = [];
-					// }
-					// conversationData.messages = [...conversationData.messages, assistantMessage];
-					
-					// // Keep using the static referenceMessageId
-					// conversationData.referenceMessageId = REFERENCE_MESSAGE_ID;
-					// saveConversationData(STORAGE_KEY, selectedConversationId, conversationData);
+					// Don't save assistant message to local storage automatically
+					// It will be saved only when user confirms via button action
 					
 					scrollToBottom();
 				} else {
@@ -738,13 +767,13 @@
 				messages = [...messages, errorMessage];
 				
 				// Save error message to local storage
-				let conversationData = getConversationData(STORAGE_KEY, selectedConversationId);
+				let conversationData = getConversationData(STORAGE_KEY, selectedConversationId as string);
 				if (conversationData) {
 					if (!conversationData.messages) {
 						conversationData.messages = [];
 					}
 					conversationData.messages = [...conversationData.messages, errorMessage];
-					saveConversationData(STORAGE_KEY, selectedConversationId, conversationData);
+					saveConversationData(STORAGE_KEY, selectedConversationId as string, conversationData);
 				}
 			}
 		} catch (error) {
@@ -800,6 +829,61 @@
 			}, 150);
 		}
 	});
+
+	// Delete conversation
+	const deleteConversation = async (conversationId: string) => {
+		conversationToDelete = conversationId;
+		showDeleteConfirm = true;
+	};
+
+	const confirmDeleteConversation = async () => {
+		if (!conversationToDelete || deletingConversation) return;
+
+		deletingConversation = true;
+		try {
+			const response = await fetch(`/api/server/conversations/${conversationToDelete}`, {
+				method: 'DELETE'
+			});
+
+			if (response.ok) {
+				// Remove conversation from list
+				conversations = conversations.filter((conv) => conv.id !== conversationToDelete);
+				
+				// If deleted conversation was selected, clear selection
+				if (selectedConversationId === conversationToDelete) {
+					selectedConversationId = null;
+					messages = [];
+					parsedMessageContent.clear();
+					selectionState.clear();
+				}
+
+				// Remove from local storage
+				const storedData = loadFromLocalStorage(STORAGE_KEY);
+				if (storedData && storedData[conversationToDelete]) {
+					delete storedData[conversationToDelete];
+					saveToLocalStorage(STORAGE_KEY, storedData);
+				}
+
+				console.log('Conversation deleted successfully:', conversationToDelete);
+			} else {
+				const errorData = await response.json();
+				console.error('Failed to delete conversation:', errorData);
+				alert('Failed to delete conversation. Please try again.');
+			}
+		} catch (error) {
+			console.error('Error deleting conversation:', error);
+			alert('Error deleting conversation. Please try again.');
+		} finally {
+			deletingConversation = false;
+			showDeleteConfirm = false;
+			conversationToDelete = null;
+		}
+	};
+
+	const cancelDeleteConversation = () => {
+		showDeleteConfirm = false;
+		conversationToDelete = null;
+	};
 
 	const newChat = async () => {
 		try {
@@ -978,28 +1062,42 @@
 				{:else}
 					<div class="flex flex-col gap-2">
 						{#each conversations as conversation (conversation.id)}
-							<button
-								onclick={() => selectConversation(conversation.id)}
-								class="flex w-full cursor-pointer items-center gap-3 rounded-[10px] px-3 py-3 text-left transition-all duration-200 hover:bg-white/8 {selectedConversationId ===
+							<div
+								class="group relative flex w-full items-center gap-2 rounded-[10px] transition-all duration-200 hover:bg-white/8 {selectedConversationId ===
 								conversation.id
 									? 'bg-white/10'
 									: ''}"
 							>
-								<div class="flex h-9 w-9 items-center justify-center rounded-lg bg-white/5 text-xl">
-									💬
-								</div>
-								<div class="min-w-0 flex-1">
-									<div
-										class="mb-1 overflow-hidden text-sm font-medium text-ellipsis whitespace-nowrap text-white/90 font-mono"
-										title={conversation.id}
-									>
-										{conversation.id}
+								<button
+									onclick={() => selectConversation(conversation.id)}
+									class="flex flex-1 cursor-pointer items-center gap-3 px-3 py-3 text-left"
+								>
+									<div class="flex h-9 w-9 items-center justify-center rounded-lg bg-white/5 text-xl">
+										💬
 									</div>
-									<div class="text-xs text-white/40">
-										{formatDate(conversation.createdAt)}
+									<div class="min-w-0 flex-1">
+										<div
+											class="mb-1 overflow-hidden text-sm font-medium text-ellipsis whitespace-nowrap text-white/90 font-mono"
+											title={conversation.id}
+										>
+											{conversation.id}
+										</div>
+										<div class="text-xs text-white/40">
+											{formatDate((conversation as any).createdAt || (conversation as any).CreatedAt)}
+										</div>
 									</div>
-								</div>
-							</button>
+								</button>
+								<button
+									onclick={(e) => {
+										e.stopPropagation();
+										deleteConversation(conversation.id);
+									}}
+									class="absolute right-2 opacity-0 transition-opacity duration-200 group-hover:opacity-100 rounded-lg bg-red-500/20 p-1.5 hover:bg-red-500/30 text-red-400"
+									title="Delete conversation"
+								>
+									<Icon icon="mdi:delete-outline" width="18" height="18" />
+								</button>
+							</div>
 						{/each}
 					</div>
 				{/if}
@@ -1387,6 +1485,19 @@
 			</div>
 		</div>
 	</main>
+
+	<!-- Delete Confirmation Dialog -->
+	<ConfirmDialog
+		open={showDeleteConfirm}
+		title="Delete Conversation"
+		message="Are you sure you want to delete this conversation? This action cannot be undone."
+		confirmText="Confirm Delete"
+		cancelText="Cancel"
+		variant="danger"
+		isLoading={deletingConversation}
+		onConfirm={confirmDeleteConversation}
+		onCancel={cancelDeleteConversation}
+	/>
 </div>
 
 <style>
