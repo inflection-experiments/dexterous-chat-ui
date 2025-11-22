@@ -10,7 +10,10 @@ export const GET = async (event: RequestEvent) => {
 		}
 
 		const messages = await getConversationMessagesById(conversationId);
-		return json({ messages });
+		console.log('Messages fetched for conversation:', conversationId, 'Count:', messages.length);
+		console.log('Messages structure:', JSON.stringify(messages.slice(0, 1), null, 2));
+		// Return messages in Data field to match backend response format
+		return json({ Data: messages });
 	} catch (error) {
 		console.error('Error in conversation messages API server endpoint:', error);
 		return json({ error: 'Failed to fetch messages' }, { status: 500 });

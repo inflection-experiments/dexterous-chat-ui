@@ -3,7 +3,7 @@
  */
 
 export interface ConversationData {
-	conversationId: string;
+	conversationId?: string;
 	userId: string;
 	referenceMessageId: string;
 	timestamp: string;

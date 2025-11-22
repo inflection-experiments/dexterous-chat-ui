@@ -25,12 +25,38 @@
 	const userId = data.userId;
 	
 	// Static IDs from chat/+page.svelte
-	const CONVERSATION_ID = '98b6495b-01fe-445f-804e-c20e1d3ba2d0';
+	// const CONVERSATION_ID = '98b6495b-01fe-445f-804e-c20e1d3ba2d0';
 	const USER_ID = '74f22a5f-8ed2-45ce-af2e-ac4c32d824f4';
 	const REFERENCE_MESSAGE_ID = '123e4567-e89b-12d3-a456-426655440000';
 	
-	let conversations = $state<Conversation[]>(data.conversations || []);
-	let selectedConversationId = $state<string | null>(null);
+	// Initialize conversations from page data and sort by CreatedAt
+	let conversations = $state<Conversation[]>(
+		(data.conversations || []).sort((a: any, b: any) => {
+			// Handle both camelCase and PascalCase, prioritize CreatedAt
+			const dateA = new Date(a.CreatedAt || a.createdAt || 0).getTime();
+			const dateB = new Date(b.CreatedAt || b.createdAt || 0).getTime();
+			return dateB - dateA; // Most recent first
+		})
+	);
+	
+	// Log conversations on initial load and auto-select the latest conversation
+	let conversationsInitialized = $state(false);
+	$effect(() => {
+		if (!conversationsInitialized && conversations.length > 0) {
+			console.log('Initial conversations loaded:', conversations.length, conversations);
+			console.log('Data conversations:', data.conversations?.length || 0);
+			
+			// Auto-select the latest conversation (first in the sorted array)
+			const latestConversation = conversations[0];
+			if (latestConversation && latestConversation.id) {
+				console.log('Auto-selecting latest conversation:', latestConversation.id);
+				selectConversation(latestConversation.id);
+			}
+			
+			conversationsInitialized = true;
+		}
+	});
+	let selectedConversationId = $state<string>('');
 	let messages = $state<Message[]>([]);
 	let newMessageText = $state('');
 	let chatContainer = $state<HTMLElement | null>(null);
@@ -228,24 +254,150 @@
 		}
 	}
 
+	// Handle button actions from markdown buttons
+	async function handleButtonAction(button: any, messageId: number | string) {
+		console.log('Button clicked:', button);
+		
+		try {
+			if (button.action === 'confirm') {
+				// Handle confirm action
+				if (button.operation === 'save' && button.payload) {
+					try {
+						const payload = JSON.parse(button.payload);
+						console.log('Saving with payload:', payload);
+						
+						// You can add API call here to save the data
+						// For now, just show a success message
+						// alert(`Saving ${payload.count || 'items'} to database...`);
+						
+						// Example API call (uncomment and modify as needed):
+						// const response = await fetch('/api/server/save-services', {
+						// 	method: 'POST',
+						// 	headers: { 'Content-Type': 'application/json' },
+						// 	body: JSON.stringify(payload)
+						// });
+						
+					} catch (error) {
+						console.error('Error parsing payload:', error);
+						alert('Error processing request');
+					}
+				} else {
+					alert('Confirm action triggered');
+				}
+			} else if (button.action === 'modify') {
+				// Handle modify action
+				alert('Modify functionality - coming soon!');
+			} else if (button.action === 'cancel') {
+				// Handle cancel action
+				console.log('Action cancelled');
+			} else {
+				console.log('Unknown button action:', button.action);
+			}
+		} catch (error) {
+			console.error('Error handling button action:', error);
+			alert('Error processing button action');
+		}
+	}
+
 	// Format date for display
-	function formatDate(dateString: string): string {
+	function formatDate(dateString: string | undefined): string {
+		if (!dateString) return 'Unknown';
+		
 		const date = new Date(dateString);
+		
+		// Check if date is valid
+		if (isNaN(date.getTime())) {
+			return 'Invalid date';
+		}
+		
 		const now = new Date();
 		const diffMs = now.getTime() - date.getTime();
 		const diffMins = Math.floor(diffMs / 60000);
 		const diffHours = Math.floor(diffMs / 3600000);
 		const diffDays = Math.floor(diffMs / 86400000);
 
+		// Show relative time for recent dates
 		if (diffMins < 1) return 'Just now';
 		if (diffMins < 60) return `${diffMins} minute${diffMins !== 1 ? 's' : ''} ago`;
 		if (diffHours < 24) return `${diffHours} hour${diffHours !== 1 ? 's' : ''} ago`;
 		if (diffDays < 7) return `${diffDays} day${diffDays !== 1 ? 's' : ''} ago`;
-		return date.toLocaleDateString();
+		
+		// For older dates, show formatted date with time
+		const options: Intl.DateTimeFormatOptions = {
+			year: 'numeric',
+			month: 'short',
+			day: 'numeric',
+			hour: '2-digit',
+			minute: '2-digit'
+		};
+		return date.toLocaleDateString('en-US', options);
+	}
+
+	// Convert backend message format to UI Message format
+	function convertBackendMessageToUIMessage(backendMsg: any): Message[] {
+		const uiMessages: Message[] = [];
+		
+		console.log('Converting backend message:', backendMsg);
+		
+		// Extract user content
+		if (backendMsg.UserContent && Array.isArray(backendMsg.UserContent) && backendMsg.UserContent.length > 0) {
+			const userText = backendMsg.UserContent
+				.filter((content: any) => content.type === 'text' && content.data?.text)
+				.map((content: any) => content.data.text)
+				.join('\n');
+			
+			if (userText.trim()) {
+				uiMessages.push({
+					id: `${backendMsg.id}-user`,
+					Content: userText,
+					Role: 'User'
+				});
+				console.log('Added user message:', userText.substring(0, 50));
+			}
+		}
+		
+		// Extract assistant content
+		if (backendMsg.AssistantContent && Array.isArray(backendMsg.AssistantContent) && backendMsg.AssistantContent.length > 0) {
+			const assistantText = backendMsg.AssistantContent
+				.filter((content: any) => content.type === 'text' && content.data?.text)
+				.map((content: any) => content.data.text)
+				.join('\n');
+			
+			if (assistantText.trim()) {
+				uiMessages.push({
+					id: `${backendMsg.id}-assistant`,
+					Content: assistantText,
+					Role: 'Assistant'
+				});
+				console.log('Added assistant message:', assistantText.substring(0, 50));
+			}
+		}
+		
+		// Fallback: if message already has Content and Role (old format or already converted)
+		// if (uiMessages.length === 0 && backendMsg.Content) {
+		// 	const content = typeof backendMsg.Content === 'string' 
+		// 		? backendMsg.Content 
+		// 		: JSON.stringify(backendMsg.Content);
+		// 	const role = backendMsg.Role === 'user' || backendMsg.Role === 'User' 
+		// 		? 'User' 
+		// 		: backendMsg.Role === 'assistant' || backendMsg.Role === 'Assistant'
+		// 		? 'Assistant'
+		// 		: 'User';
+			
+		// 	uiMessages.push({
+		// 		id: backendMsg.id || Date.now(),
+		// 		Content: content,
+		// 		Role: role
+		// 	});
+		// 	console.log('Added fallback message with Content field');
+		// }
+		
+		return uiMessages;
 	}
 
 	// Select a conversation and load its messages
 	async function selectConversation(conversationId: string) {
+		console.log('Selecting conversation:', conversationId);
 		selectedConversationId = conversationId;
 		messages = [];
 		parsedMessageContent.clear();
@@ -254,14 +406,46 @@
 		try {
 			// Load messages from API via server endpoint
 			const response = await fetch(`/api/server/conversations/${conversationId}/messages`);
+			console.log('Fetching messages for conversation:', conversationId);
 			
 			if (response.ok) {
 				const result = await response.json();
-				const apiMessages = result.messages || [];
+				console.log('Messages API response (full):', JSON.stringify(result, null, 2));
+				
+				// Handle different response structures
+				let apiMessages: any[] = [];
+				
+			
+				if (result.Data && Array.isArray(result.Data)) {
+					apiMessages = result.Data;
+					console.log('Found messages in result.Data:', apiMessages.length);
+				} 
+
+				// // Check for messages array
+				// else if (result.messages && Array.isArray(result.messages)) {
+				// 	apiMessages = result.messages;
+				// 	console.log('Found messages in result.messages:', apiMessages.length);
+				// }
+				// // Check if result itself is an array
+				// else if (Array.isArray(result)) {
+				// 	apiMessages = result;
+				// 	console.log('Result is an array:', apiMessages.length);
+				// }
+				
+				console.log('Extracted apiMessages:', apiMessages.length, apiMessages);
 				
 				if (Array.isArray(apiMessages) && apiMessages.length > 0) {
-					messages = apiMessages;
-					console.log('Loaded messages from API:', messages.length);
+					// Convert backend message format to UI message format
+					const convertedMessages: Message[] = [];
+					apiMessages.forEach((backendMsg: any, index: number) => {
+						console.log(`Processing backend message ${index}:`, backendMsg);
+						const uiMsgs = convertBackendMessageToUIMessage(backendMsg);
+						console.log(`Converted to ${uiMsgs.length} UI messages:`, uiMsgs);
+						convertedMessages.push(...uiMsgs);
+					});
+					
+					messages = convertedMessages;
+					console.log('Final converted messages:', messages.length, messages);
 
 					// Parse markdown for all loaded messages
 					messages.forEach((msg) => {
@@ -271,78 +455,85 @@
 					});
 
 					// Save messages to local storage
-					const conversationData = getConversationData(STORAGE_KEY, conversationId) || {
-						conversationId,
-						userId: USER_ID,
-						referenceMessageId: REFERENCE_MESSAGE_ID,
-						timestamp: new Date().toISOString(),
-						messages: [],
-						selectedItems: []
-					};
-					conversationData.messages = messages;
-					saveConversationData(STORAGE_KEY, conversationId, conversationData);
+					// const conversationData = getConversationData(STORAGE_KEY, conversationId) || {
+					// 	conversationId,
+					// 	userId: userId,
+					// 	referenceMessageId: REFERENCE_MESSAGE_ID,
+					// 	timestamp: new Date().toISOString(),
+					// 	messages: [],
+					// 	selectedItems: []
+					// };
+					// conversationData.messages = messages;
+					// saveConversationData(STORAGE_KEY, conversationId, conversationData);
+					
+					// // Scroll to bottom after messages are loaded
+					// await new Promise(resolve => setTimeout(resolve, 100));
+					// scrollToBottom();
 				} else {
+					console.warn('No messages found in API response, trying local storage');
 					// Try loading from local storage if API returns empty
-					const storedData = loadFromLocalStorage(STORAGE_KEY);
-					if (storedData && storedData[conversationId] && storedData[conversationId].messages) {
-						const storedMessages = storedData[conversationId].messages;
-						if (Array.isArray(storedMessages) && storedMessages.length > 0) {
-							messages = storedMessages;
-							console.log('Loaded messages from local storage:', messages.length);
+					// const storedData = loadFromLocalStorage(STORAGE_KEY);
+					// if (storedData && storedData[conversationId] && storedData[conversationId].messages) {
+					// 	const storedMessages = storedData[conversationId].messages;
+					// 	if (Array.isArray(storedMessages) && storedMessages.length > 0) {
+					// 		messages = storedMessages;
+					// 		console.log('Loaded messages from local storage:', messages.length);
 							
-							// Parse markdown for all loaded messages
-							messages.forEach((msg) => {
-								if (msg.Role === 'Assistant' && msg.Content) {
-									parsedMessageContent.set(msg.id, parseMarkdown(msg.Content));
-								}
-							});
-						}
-					}
+					// 		// Parse markdown for all loaded messages
+					// 		messages.forEach((msg) => {
+					// 			if (msg.Role === 'Assistant' && msg.Content) {
+					// 				parsedMessageContent.set(msg.id, parseMarkdown(msg.Content));
+					// 			}
+					// 		});
+					// 	}
+					// }
 				}
 			} else {
-				// Try loading from local storage if API returns empty
-				const storedData = loadFromLocalStorage(STORAGE_KEY);
-				if (storedData && storedData[conversationId] && storedData[conversationId].messages) {
-					const storedMessages = storedData[conversationId].messages;
-					if (Array.isArray(storedMessages) && storedMessages.length > 0) {
-						messages = storedMessages;
-						console.log('Loaded messages from local storage:', messages.length);
+				const errorText = await response.text();
+				console.error('Failed to fetch messages:', response.status, errorText);
+				// Try loading from local storage if API returns error
+				// const storedData = loadFromLocalStorage(STORAGE_KEY);
+				// if (storedData && storedData[conversationId] && storedData[conversationId].messages) {
+				// 	const storedMessages = storedData[conversationId].messages;
+				// 	if (Array.isArray(storedMessages) && storedMessages.length > 0) {
+				// 		messages = storedMessages;
+				// 		console.log('Loaded messages from local storage (fallback):', messages.length);
 						
-						// Parse markdown for all loaded messages
-						messages.forEach((msg) => {
-							if (msg.Role === 'Assistant' && msg.Content) {
-								parsedMessageContent.set(msg.id, parseMarkdown(msg.Content));
-							}
-						});
-					}
-				}
+				// 		// Parse markdown for all loaded messages
+				// 		messages.forEach((msg) => {
+				// 			if (msg.Role === 'Assistant' && msg.Content) {
+				// 				parsedMessageContent.set(msg.id, parseMarkdown(msg.Content));
+				// 			}
+				// 		});
+				// 	}
+				// }
 			}
 
 			// Scroll to bottom after messages are loaded and rendered
 			await new Promise(resolve => setTimeout(resolve, 100));
-			scrollToBottom();
+			// scrollToBottom();
 		} catch (error) {
 			console.error('Error loading conversation messages:', error);
 			// Fallback to local storage
-			const storedData = loadFromLocalStorage(STORAGE_KEY);
-			if (storedData && storedData[conversationId] && storedData[conversationId].messages) {
-				const storedMessages = storedData[conversationId].messages;
-				if (Array.isArray(storedMessages) && storedMessages.length > 0) {
-					messages = storedMessages;
-					console.log('Loaded messages from local storage (fallback):', messages.length);
+			// const storedData = loadFromLocalStorage(STORAGE_KEY);
+			// if (storedData && storedData[conversationId] && storedData[conversationId].messages) {
+			// 	const storedMessages = storedData[conversationId].messages;
+			// 	if (Array.isArray(storedMessages) && storedMessages.length > 0) {
+			// 		messages = storedMessages;
+			// 		console.log('Loaded messages from local storage (fallback):', messages.length);
 					
-					// Parse markdown for all loaded messages
-					messages.forEach((msg) => {
-						if (msg.Role === 'Assistant' && msg.Content) {
-							parsedMessageContent.set(msg.id, parseMarkdown(msg.Content));
-						}
-					});
+			// 		// Parse markdown for all loaded messages
+			// 		messages.forEach((msg) => {
+			// 			if (msg.Role === 'Assistant' && msg.Content) {
+			// 				parsedMessageContent.set(msg.id, parseMarkdown(msg.Content));
+			// 			}
+			// 		});
 					
-					// Scroll to bottom after messages are loaded
-					await new Promise(resolve => setTimeout(resolve, 100));
-					scrollToBottom();
-				}
-			}
+			// 		// Scroll to bottom after messages are loaded
+			// 		await new Promise(resolve => setTimeout(resolve, 100));
+			// 		scrollToBottom();
+			// 	}
+			// }
 		}
 	}
 
@@ -377,8 +568,62 @@
 
 		// Create new conversation if none selected
 		if (!selectedConversationId) {
-			// Use static conversation ID
-			selectedConversationId = CONVERSATION_ID;
+			// Create a new conversation first
+			try {
+				const response = await fetch('/api/server/conversations', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({
+						ProjectId: '8ad453ce-2fe8-4beb-91ce-0c55504edcc8',
+						userId: userId
+					})
+				});
+
+				if (response.ok) {
+					const result = await response.json();
+					// Extract conversation ID from response
+					const newConversationId = result.Data?.id || result.data?.id || result.id || result.conversationId;
+					
+					if (newConversationId) {
+						selectedConversationId = newConversationId;
+						// Initialize conversation data
+						// const conversationData = {
+						// 	conversationId: newConversationId,
+						// 	userId: userId,
+						// 	referenceMessageId: REFERENCE_MESSAGE_ID,
+						// 	timestamp: new Date().toISOString(),
+						// 	messages: [],
+						// 	selectedItems: []
+						// };
+						// saveConversationData(STORAGE_KEY, newConversationId, conversationData);
+						
+						// Add to conversations list
+						const newConversation = {
+							id: newConversationId,
+							ProjectId: '8ad453ce-2fe8-4beb-91ce-0c55504edcc8',
+							UserId: userId,
+							Status: 'active',
+							Context: {},
+							CreatedAt: new Date().toISOString(),
+							UpdatedAt: new Date().toISOString()
+						};
+						conversations = [newConversation, ...conversations].sort((a: any, b: any) => {
+							const dateA = new Date(a.CreatedAt || a.createdAt || 0).getTime();
+							const dateB = new Date(b.CreatedAt || b.createdAt || 0).getTime();
+							return dateB - dateA;
+						});
+					} else {
+						console.error('Failed to create conversation: No ID in response');
+						return;
+					}
+				} else {
+					console.error('Failed to create conversation:', response.statusText);
+					return;
+				}
+			} catch (error) {
+				console.error('Error creating conversation:', error);
+				return;
+			}
 		}
 
 		const userMessage: Message = {
@@ -392,37 +637,40 @@
 		scrollToBottom();
 
 		// Get or create conversation metadata from localStorage
-		let conversationData = getConversationData(STORAGE_KEY, selectedConversationId);
-		if (!conversationData) {
-			// Create new conversation data
-			conversationData = {
-				conversationId: CONVERSATION_ID,
-				userId: USER_ID,
-				referenceMessageId: REFERENCE_MESSAGE_ID,
-				timestamp: new Date().toISOString(),
-				messages: [],
-				selectedItems: []
-			};
-		}
+		// let conversationData = getConversationData(STORAGE_KEY, selectedConversationId);
+		// if (!conversationData) {
+		// 	// Create new conversation data using the selected conversation ID
+		// 	conversationData = {
+		// 		conversationId: selectedConversationId, // Use the currently selected conversation ID
+		// 		userId: USER_ID,
+		// 		referenceMessageId: REFERENCE_MESSAGE_ID,
+		// 		timestamp: new Date().toISOString(),
+		// 		messages: [],
+		// 		selectedItems: []
+		// 	};
+		// } else {
+		// 	// Ensure conversationId is set to the selected one
+		// 	conversationData.conversationId = selectedConversationId;
+		// }
 		
-		// Save user message to local storage
-		if (!conversationData.messages) {
-			conversationData.messages = [];
-		}
-		conversationData.messages = [...conversationData.messages, userMessage];
-		saveConversationData(STORAGE_KEY, selectedConversationId, conversationData);
+		// // Save user message to local storage
+		// if (!conversationData.messages) {
+		// 	conversationData.messages = [];
+		// }
+		// conversationData.messages = [...conversationData.messages, userMessage];
+		// saveConversationData(STORAGE_KEY, selectedConversationId, conversationData);
 
-		// Use static IDs
-		const CURRENT_CONVERSATION_ID = conversationData.conversationId || CONVERSATION_ID;
-		const CURRENT_USER_ID = conversationData.userId || USER_ID;
-		const CURRENT_REFERENCE_MESSAGE_ID = conversationData.referenceMessageId || REFERENCE_MESSAGE_ID;
+		// Use the currently selected conversation ID dynamically
+		const CURRENT_CONVERSATION_ID = selectedConversationId; // Use the selected conversation ID directly
+		const CURRENT_USER_ID = USER_ID;
+		const CURRENT_REFERENCE_MESSAGE_ID = REFERENCE_MESSAGE_ID;
 
 		try {
 			const response = await fetch('/api/server/chat', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
-					conversationId: CURRENT_CONVERSATION_ID,
+					conversationId: CURRENT_CONVERSATION_ID, // This will be the currently selected conversation ID
 					message: trimmedMessage,
 					userId: CURRENT_USER_ID,
 					referenceMessageId: CURRENT_REFERENCE_MESSAGE_ID
@@ -431,26 +679,54 @@
 
 			if (response.ok) {
 				const result = await response.json();
-				const content = result?.Content || result?.content || result?.message || result?.Message;
-				if (content) {
+				console.log('Chat API response:', result);
+				
+				// Handle new response format with AssistantContent array
+				let assistantContent = '';
+				
+				// Check for new format (AssistantContent array)
+				if (result.Data && Array.isArray(result.Data) && result.Data.length > 0) {
+					const latestMessage = result.Data[result.Data.length - 1];
+					if (latestMessage.AssistantContent && Array.isArray(latestMessage.AssistantContent)) {
+						assistantContent = latestMessage.AssistantContent
+							.filter((content: any) => content.type === 'text' && content.data?.text)
+							.map((content: any) => content.data.text)
+							.join('\n');
+					}
+				} else if (result.Data?.AssistantContent && Array.isArray(result.Data.AssistantContent)) {
+					assistantContent = result.Data.AssistantContent
+						.filter((content: any) => content.type === 'text' && content.data?.text)
+						.map((content: any) => content.data.text)
+						.join('\n');
+				} else {
+					// Fallback to old format
+					assistantContent = result?.Content || result?.content || result?.message || result?.Message || result?.Data?.Content || '';
+				}
+				
+				if (assistantContent) {
 					const assistantMessage: Message = {
 						id: Date.now() + 1,
-						Content: content,
+						Content: assistantContent,
 						Role: 'Assistant'
 					};
 					messages = [...messages, assistantMessage];
 					
-					// Save assistant message to local storage
-					if (!conversationData.messages) {
-						conversationData.messages = [];
-					}
-					conversationData.messages = [...conversationData.messages, assistantMessage];
+					// Parse markdown for assistant message
+					parsedMessageContent.set(assistantMessage.id, parseMarkdown(assistantContent));
 					
-					// Keep using the static referenceMessageId
-					conversationData.referenceMessageId = REFERENCE_MESSAGE_ID;
-					saveConversationData(STORAGE_KEY, selectedConversationId, conversationData);
+					// Save assistant message to local storage
+					// if (!conversationData.messages) {
+					// 	conversationData.messages = [];
+					// }
+					// conversationData.messages = [...conversationData.messages, assistantMessage];
+					
+					// // Keep using the static referenceMessageId
+					// conversationData.referenceMessageId = REFERENCE_MESSAGE_ID;
+					// saveConversationData(STORAGE_KEY, selectedConversationId, conversationData);
 					
 					scrollToBottom();
+				} else {
+					console.warn('No assistant content found in response:', result);
 				}
 			} else {
 				console.error('Failed to send message:', response.statusText);
@@ -481,14 +757,14 @@
 			messages = [...messages, errorMessage];
 			
 			// Save error message to local storage
-			let conversationData = getConversationData(STORAGE_KEY, selectedConversationId);
-			if (conversationData) {
-				if (!conversationData.messages) {
-					conversationData.messages = [];
-				}
-				conversationData.messages = [...conversationData.messages, errorMessage];
-				saveConversationData(STORAGE_KEY, selectedConversationId, conversationData);
-			}
+			// let conversationData = getConversationData(STORAGE_KEY, selectedConversationId);
+			// if (conversationData) {
+			// 	if (!conversationData.messages) {
+			// 		conversationData.messages = [];
+			// 	}
+			// 	conversationData.messages = [...conversationData.messages, errorMessage];
+			// 	saveConversationData(STORAGE_KEY, selectedConversationId, conversationData);
+			// }
 		} finally {
 			isLoading = false;
 		}
@@ -525,12 +801,112 @@
 		}
 	});
 
-	const newChat = () => {
-		selectedConversationId = null;
-		messages = [];
-		newMessageText = '';
-		parsedMessageContent.clear();
-		selectionState.clear();
+	const newChat = async () => {
+		try {
+			// Create new conversation via API
+			const response = await fetch('/api/server/conversations', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					ProjectId: '23fa2c4f-3462-4892-81c8-273e73d35e86',
+					userId: userId // Use userId from page params
+				})
+			});
+
+			const result = await response.json();
+			console.log('New conversation API response:', result);
+			if (response.ok) {
+				
+				// Extract conversation ID from response - handle different response structures
+				let newConversationId: string | null = null;
+				let newConversation: any = null;
+				
+				// Check for conversation object in response
+				if (result.Data && result.Data.id) {
+					newConversationId = result.Data.id;
+					newConversation = result.Data;
+				// } else if (result.data && result.data.id) {
+				// 	newConversationId = result.data.id;
+				// 	newConversation = result.data;
+				// } else if (result.id) {
+				// 	newConversationId = result.id;
+				// 	newConversation = result;
+				// } else if (result.conversationId) {
+				// 	newConversationId = result.conversationId;
+				// 	newConversation = result;
+				}
+				
+				if (newConversationId) {
+					// Set the new conversation as selected
+					selectedConversationId = newConversationId;
+					messages = [];
+					newMessageText = '';
+					parsedMessageContent.clear();
+					selectionState.clear();
+					
+					// Initialize conversation data in local storage
+					// const conversationData = {
+					// 	conversationId: newConversationId,
+					// 	userId: userId,
+					// 	referenceMessageId: REFERENCE_MESSAGE_ID,
+					// 	timestamp: new Date().toISOString(),
+					// 	messages: [],
+					// 	selectedItems: []
+					// };
+					// saveConversationData(STORAGE_KEY, newConversationId, conversationData);
+					
+					// Add new conversation to the sidebar
+					// Use the conversation object from API if available, otherwise create one
+					if (newConversation) {
+						// Ensure it has the required fields
+						const conversationToAdd = {
+							id: newConversationId,
+							ProjectId: newConversation.ProjectId || '8ad453ce-2fe8-4beb-91ce-0c55504edcc8',
+							UserId: newConversation.UserId || userId,
+							Status: newConversation.Status || 'active',
+							Context: newConversation.Context || {},
+							CreatedAt: newConversation.CreatedAt || new Date().toISOString(),
+							UpdatedAt: newConversation.UpdatedAt || new Date().toISOString()
+						};
+						// Add to the beginning of the list and sort by CreatedAt
+						conversations = [conversationToAdd, ...conversations].sort((a: any, b: any) => {
+							const dateA = new Date(a.CreatedAt || a.createdAt || 0).getTime();
+							const dateB = new Date(b.CreatedAt || b.createdAt || 0).getTime();
+							return dateB - dateA; // Most recent first
+						});
+					// } else {
+					// 	// Fallback: create conversation object manually
+					// 	const conversationToAdd = {
+					// 		id: newConversationId,
+					// 		ProjectId: '8ad453ce-2fe8-4beb-91ce-0c55504edcc8',
+					// 		UserId: userId,
+					// 		Status: 'active',
+					// 		Context: {},
+					// 		CreatedAt: new Date().toISOString(),
+					// 		UpdatedAt: new Date().toISOString()
+					// 	};
+					// 	conversations = [conversationToAdd, ...conversations].sort((a: any, b: any) => {
+					// 		const dateA = new Date(a.CreatedAt || a.createdAt || 0).getTime();
+					// 		const dateB = new Date(b.CreatedAt || b.createdAt || 0).getTime();
+					// 		return dateB - dateA; // Most recent first
+					// 	});
+					}
+					
+					console.log('New conversation created and added to sidebar:', newConversationId);
+				} else {
+					console.error('No conversation ID in response:', result);
+					alert('Failed to create conversation: No ID returned from server');
+				}
+			} else {
+				const errorText = await response.text();
+				console.error('Failed to create conversation:', response.status, errorText);
+				alert(`Failed to create conversation: ${response.statusText}`);
+			}
+		} catch (error) {
+			console.error('Error creating new conversation:', error);
+			alert('Error creating new conversation. Please try again.');
+		}
+
 		if (inputElement) {
 			inputElement.style.height = 'auto';
 			setTimeout(() => {
@@ -541,13 +917,18 @@
 		}
 	};
 
+	let conversationsLoaded = $state(false);
 	$effect(() => {
 		setTimeout(() => {
 			if (inputElement) {
 				inputElement.style.height = '60px';
 			}
 		}, 0);
-		// loadConversations();
+		// Load conversations on mount only once if not already loaded
+		if (!conversationsLoaded && conversations.length === 0 && (!data.conversations || data.conversations.length === 0)) {
+			conversationsLoaded = true;
+			// loadingConversations();
+		}
 	});
 </script>
 
@@ -609,12 +990,13 @@
 								</div>
 								<div class="min-w-0 flex-1">
 									<div
-										class="mb-1 overflow-hidden text-sm font-medium text-ellipsis whitespace-nowrap text-white/90"
+										class="mb-1 overflow-hidden text-sm font-medium text-ellipsis whitespace-nowrap text-white/90 font-mono"
+										title={conversation.id}
 									>
-										{conversation.title || 'Untitled Conversation'}
+										{conversation.id}
 									</div>
 									<div class="text-xs text-white/40">
-										{formatDate(conversation.updatedAt || conversation.createdAt)}
+										{formatDate(conversation.createdAt)}
 									</div>
 								</div>
 							</button>
@@ -902,6 +1284,21 @@
 											<p class="my-2 leading-relaxed text-white/90">
 												{@html parseInlineFormatting(block.content)}
 											</p>
+										{:else if block.type === 'buttons'}
+											<div class="my-4 flex flex-wrap gap-3">
+												{#each block.content as button}
+													<button
+														class="rounded-lg px-4 py-2.5 text-sm font-semibold text-white shadow-lg transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl {button.className === 'btn-primary'
+															? 'bg-gradient-to-br from-[#ff6b35] to-[#f7931e] shadow-[0_4px_12px_rgba(255,107,53,0.3)] hover:shadow-[0_6px_20px_rgba(255,107,53,0.4)]'
+															: button.className === 'btn-secondary' || button.className === 'btn-secondaryy'
+															? 'border border-white/20 bg-white/10 backdrop-blur-sm hover:bg-white/20'
+															: 'bg-gradient-to-br from-[#ff6b35] to-[#f7931e] shadow-[0_4px_12px_rgba(255,107,53,0.3)] hover:shadow-[0_6px_20px_rgba(255,107,53,0.4)]'}"
+														onclick={() => handleButtonAction(button, message.id)}
+													>
+														{@html parseInlineFormatting(button.text)}
+													</button>
+												{/each}
+											</div>
 										{/if}
 									{/each}
 								</div>

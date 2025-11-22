@@ -154,12 +154,12 @@ export interface BotMessage {
 
 export interface Conversation {
   id: string;
-  userId: string;
-  botId: string;
+  userId?: string;
+  botId?: string;
   title?: string;
-  createdAt: string;
-  updatedAt: string;
-  status: 'active' | 'archived' | 'deleted';
+  createdAt?: string;
+  updatedAt?: string;
+  status?: 'active' | 'archived' | 'deleted';
   metadata?: MessageMetadata;
 }
 

@@ -23,6 +23,65 @@ export interface ListItem {
 	indent: number;
 }
 
+export interface ButtonData {
+	text: string;
+	action: string;
+	operation?: string;
+	payload?: string;
+	className?: string;
+}
+
+/**
+ * Extract HTML buttons from text content (handles multi-line HTML)
+ */
+function extractButtons(text: string): { buttons: ButtonData[]; cleanedText: string } {
+	const buttons: ButtonData[] = [];
+	let cleanedText = text;
+	
+	// First, extract action-buttons div wrapper if present (handles multi-line)
+	const actionButtonsRegex = /<div[^>]*class="action-buttons"[^>]*>([\s\S]*?)<\/div>/gi;
+	let divMatch;
+	let buttonsHtml = '';
+	
+	while ((divMatch = actionButtonsRegex.exec(text)) !== null) {
+		buttonsHtml = divMatch[1];
+		cleanedText = cleanedText.replace(divMatch[0], '');
+	}
+	
+	// If we found a div, extract buttons from it, otherwise search in the full text
+	const searchText = buttonsHtml || text;
+	
+	// Match button elements with data attributes (handles multi-line with [\s\S])
+	const buttonRegex = /<button[^>]*data-action="([^"]*)"[^>]*>([\s\S]*?)<\/button>/gi;
+	let match;
+	
+	while ((match = buttonRegex.exec(searchText)) !== null) {
+		const fullMatch = match[0];
+		const action = match[1];
+		const buttonText = match[2].trim().replace(/\s+/g, ' '); // Clean up whitespace
+		
+		// Extract additional attributes
+		const operationMatch = fullMatch.match(/data-operation="([^"]*)"/i);
+		const payloadMatch = fullMatch.match(/data-payload='([^']*)'/i);
+		const classMatch = fullMatch.match(/class="([^"]*)"/i);
+		
+		buttons.push({
+			text: buttonText,
+			action: action,
+			operation: operationMatch ? operationMatch[1] : undefined,
+			payload: payloadMatch ? payloadMatch[1] : undefined,
+			className: classMatch ? classMatch[1] : undefined
+		});
+		
+		// Remove button from cleaned text if not already removed by div
+		if (!buttonsHtml) {
+			cleanedText = cleanedText.replace(fullMatch, '');
+		}
+	}
+	
+	return { buttons, cleanedText: cleanedText.trim() };
+}
+
 export function parseMarkdown(md: string): ParsedBlock[] {
 	const lines = md.split('\n');
 	const result: ParsedBlock[] = [];
@@ -88,8 +147,51 @@ export function parseMarkdown(md: string): ParsedBlock[] {
 			i++;
 		}
 	}
+	
+	// Post-process: check for buttons in paragraph blocks that might span multiple lines
+	// This handles cases where buttons are embedded in the markdown text
+	const finalResult: ParsedBlock[] = [];
+	let accumulatedText = '';
+	
+	for (let j = 0; j < result.length; j++) {
+		const block = result[j];
+		if (block.type === 'p' && block.content) {
+			// Accumulate paragraph text to handle multi-line button HTML
+			accumulatedText += (accumulatedText ? '\n' : '') + block.content;
+		} else {
+			// When we hit a non-paragraph block, process accumulated text
+			if (accumulatedText) {
+				const { buttons, cleanedText } = extractButtons(accumulatedText);
+				if (buttons.length > 0) {
+					// Add text content if any remains
+					if (cleanedText.trim()) {
+						finalResult.push({ type: 'p', content: cleanedText });
+					}
+					// Add buttons block
+					finalResult.push({ type: 'buttons', content: buttons });
+				} else if (accumulatedText.trim()) {
+					finalResult.push({ type: 'p', content: accumulatedText });
+				}
+				accumulatedText = '';
+			}
+			finalResult.push(block);
+		}
+	}
+	
+	// Process any remaining accumulated text
+	if (accumulatedText) {
+		const { buttons, cleanedText } = extractButtons(accumulatedText);
+		if (buttons.length > 0) {
+			if (cleanedText.trim()) {
+				finalResult.push({ type: 'p', content: cleanedText });
+			}
+			finalResult.push({ type: 'buttons', content: buttons });
+		} else if (accumulatedText.trim()) {
+			finalResult.push({ type: 'p', content: accumulatedText });
+		}
+	}
 
-	return result;
+	return finalResult;
 }
 
 export function parseTable(lines: string[]): TableData {
