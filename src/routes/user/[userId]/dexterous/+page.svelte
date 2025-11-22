@@ -335,6 +335,13 @@
 		}
 	}
 
+	// Truncate UUID for display
+	function truncateUUID(uuid: string | undefined, length: number = 8): string {
+		if (!uuid) return 'Unknown';
+		if (uuid.length <= length) return uuid;
+		return uuid.substring(0, length) + '...';
+	}
+
 	// Format date for display
 	function formatDate(dateString: string | undefined): string {
 		if (!dateString) return 'Unknown';
@@ -1080,7 +1087,7 @@
 											class="mb-1 overflow-hidden text-sm font-medium text-ellipsis whitespace-nowrap text-white/90 font-mono"
 											title={conversation.id}
 										>
-											{conversation.id}
+											{truncateUUID(conversation.id)}
 										</div>
 										<div class="text-xs text-white/40">
 											{formatDate((conversation as any).createdAt || (conversation as any).CreatedAt)}
