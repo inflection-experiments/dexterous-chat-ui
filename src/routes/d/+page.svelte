@@ -6,13 +6,13 @@
     const USER_ID = '74f22a5f-8ed2-45ce-af2e-ac4c32d824f4';
     const REFERENCE_MESSAGE_ID = '123e4567-e89b-12d3-a456-426655440000';
   
-    let messages: Message[] = [];
-    let newMessageText = '';
-    let chatContainer: HTMLElement;
-    let inputElement: HTMLTextAreaElement;
-    let isLoading = false;
-    let sidebarOpen = true;
-    let inputFocused = false;
+    let messages = $state<Message[]>([]);
+    let newMessageText = $state('');
+    let chatContainer = $state<HTMLElement | null>(null);
+    let inputElement = $state<HTMLTextAreaElement | null>(null);
+    let isLoading = $state(false);
+    let sidebarOpen = $state(true);
+    let inputFocused = $state(false);
   
     const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
       if (chatContainer) {
@@ -114,16 +114,18 @@
       }
     };
   
-    $: if (newMessageText) adjustTextareaHeight();
-  
+    $effect(() => {
+      if (newMessageText) adjustTextareaHeight();
+    });
+
     // when messages array changes, scroll to bottom
-    $: {
+    $effect(() => {
       // reactive to messages length change
       const len = messages.length;
       if (len > 0) {
         scrollToBottom();
       }
-    }
+    });
   
     const newChat = () => {
       messages = [];
@@ -148,7 +150,7 @@
         <div class="flex items-center gap-3 px-4 py-4">
           <button
             class="w-10 h-10 flex items-center justify-center rounded-lg bg-white/6 hover:bg-white/8 transition"
-            on:click={toggleSidebar}
+            onclick={toggleSidebar}
             aria-label="Toggle sidebar"
             title="Toggle sidebar"
           >
@@ -177,7 +179,7 @@
         <!-- New conversation button -->
         <div class="px-4">
           <button
-            on:click={newChat}
+            onclick={newChat}
             class="w-full flex items-center gap-3 px-3 py-3 rounded-lg bg-white/5 hover:bg-white/6 transition text-sm"
           >
             <Icon icon="mdi:plus" class="w-5 h-5 text-white/80" />
@@ -263,10 +265,10 @@
               <p class="text-sm text-white/50 mb-6">Ask anything — code help, writing, brainstorming. I'm ready.</p>
   
               <div class="flex items-center justify-center gap-3">
-                <button class="px-4 py-2 rounded-md bg-white/6 hover:bg-white/8" on:click={() => { newMessageText = 'Help me write a SQL migration'; inputElement?.focus(); }}>
+                <button class="px-4 py-2 rounded-md bg-white/6 hover:bg-white/8" onclick={() => { newMessageText = 'Help me write a SQL migration'; inputElement?.focus(); }}>
                   Try prompt
                 </button>
-                <button class="px-4 py-2 rounded-md bg-white/6 hover:bg-white/8" on:click={() => { newMessageText = 'Generate a form with drag and drop components'; inputElement?.focus(); }}>
+                <button class="px-4 py-2 rounded-md bg-white/6 hover:bg-white/8" onclick={() => { newMessageText = 'Generate a form with drag and drop components'; inputElement?.focus(); }}>
                   Form builder prompt
                 </button>
               </div>
@@ -277,7 +279,7 @@
           <div
             bind:this={chatContainer}
             class="h-full overflow-y-auto px-6 py-6 pb-40 space-y-6"
-            on:click={() => inputElement?.focus()}
+            onclick={() => inputElement?.focus()}
           >
             {#each messages as message (message.id)}
               <div class="flex items-start gap-4 {message.Role === 'User' ? 'justify-end' : 'justify-start'}">
@@ -342,10 +344,10 @@
                 <textarea
                   bind:this={inputElement}
                   bind:value={newMessageText}
-                  on:keydown={handleKeydown}
-                  on:input={adjustTextareaHeight}
-                  on:focus={() => inputFocused = true}
-                  on:blur={() => inputFocused = false}
+                  onkeydown={handleKeydown}
+                  oninput={adjustTextareaHeight}
+                  onfocus={() => inputFocused = true}
+                  onblur={() => inputFocused = false}
                   placeholder="Type a message — press Enter to send"
                   class="w-full resize-none bg-transparent border-none outline-none text-sm text-white placeholder-white/40 leading-relaxed max-h-[200px] overflow-y-auto"
                   rows="1"
@@ -362,7 +364,7 @@
                 </select>
   
                 <button
-                  on:click={sendMessage}
+                  onclick={sendMessage}
                   disabled={!newMessageText.trim() || isLoading}
                   class="w-11 h-11 rounded-lg flex items-center justify-center transition
                         {newMessageText.trim() && !isLoading ? 'bg-white text-[#0b0b0d] hover:scale-[1.03]' : 'bg-white/6 text-white/50 cursor-not-allowed'}"

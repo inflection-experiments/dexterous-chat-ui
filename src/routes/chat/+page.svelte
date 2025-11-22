@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { Message } from '$lib/types/chat.ts';
 	import Icon from '@iconify/svelte';
-	import { onMount } from 'svelte';
+	import { parseMarkdown, parseTable, parseInlineFormatting } from '$lib/utils/markdownParser.ts';
 
 	// import type { Message } from '$lib/types/chat';
 
@@ -9,140 +9,80 @@
 	const USER_ID = '74f22a5f-8ed2-45ce-af2e-ac4c32d824f4';
 	const REFERENCE_MESSAGE_ID = '123e4567-e89b-12d3-a456-426655440000';
 
-	let messages: Message[] = [];
-	let newMessageText = '';
-	let chatContainer: HTMLElement;
-	let inputElement: HTMLTextAreaElement;
-	let isLoading = false;
-	let sidebarOpen = true;
-	let inputFocused = false;
+	// Local storage key for this conversation
+	const STORAGE_KEY = `chat_conversation_${CONVERSATION_ID}`;
+
+	// Initialize conversation data in localStorage
+	function initializeConversationData() {
+		if (typeof window === 'undefined') return;
+		
+		const stored = localStorage.getItem(STORAGE_KEY);
+		if (!stored) {
+			const conversationData = {
+				conversationId: CONVERSATION_ID,
+				userId: USER_ID,
+				referenceMessageId: REFERENCE_MESSAGE_ID,
+				timestamp: new Date().toISOString(),
+				messages: []
+			};
+			localStorage.setItem(STORAGE_KEY, JSON.stringify(conversationData));
+		}
+	}
+
+	// Load conversation data from localStorage
+	function loadConversationData() {
+		if (typeof window === 'undefined') return null;
+		
+		try {
+			const stored = localStorage.getItem(STORAGE_KEY);
+			if (!stored) return null;
+			return JSON.parse(stored);
+		} catch (error) {
+			console.error('Error loading conversation data:', error);
+			return null;
+		}
+	}
+
+	// Save conversation data to localStorage
+	function saveConversationData(conversationData: any) {
+		if (typeof window === 'undefined') return;
+		
+		try {
+			conversationData.timestamp = new Date().toISOString();
+			localStorage.setItem(STORAGE_KEY, JSON.stringify(conversationData));
+		} catch (error) {
+			console.error('Error saving conversation data:', error);
+		}
+	}
+
+	// Initialize on component mount and load messages
+	$effect(() => {
+		initializeConversationData();
+		
+		// Load messages from localStorage if available
+		const conversationData = loadConversationData();
+		if (conversationData && conversationData.messages && conversationData.messages.length > 0) {
+			messages = conversationData.messages;
+		}
+	});
+
+	let messages = $state<Message[]>([]);
+	let newMessageText = $state('');
+	let chatContainer = $state<HTMLElement | null>(null);
+	let inputElement = $state<HTMLTextAreaElement | null>(null);
+	let isLoading = $state(false);
+	let sidebarOpen = $state(true);
+	let inputFocused = $state(false);
 
 	// Store parsed content for each message to enable editing
-	let parsedMessageContent = new Map<number | string, any[]>();
+	let parsedMessageContent = $state(new Map<number | string, any[]>());
 
 	// Store selection state for each message: { messageId: { blockIndex: { type: 'table'|'list'|'checklist', selected: Set<indices> } } }
-	let selectionState = new Map<
-		number | string,
-		Map<number, { type: string; selected: Set<number> }>
-	>();
+	let selectionState = $state(
+		new Map<number | string, Map<number, { type: string; selected: Set<number> }>>()
+	);
 
 	// Markdown parsing functions
-	function parseMarkdown(md: string) {
-		const lines = md.split('\n');
-		const result: any[] = [];
-		let i = 0;
-
-		while (i < lines.length) {
-			const line = lines[i];
-
-			// Code block
-			if (line.trim().startsWith('```')) {
-				const language = line.trim().substring(3);
-				const codeLines = [];
-				i++;
-				while (i < lines.length && !lines[i].trim().startsWith('```')) {
-					codeLines.push(lines[i]);
-					i++;
-				}
-				result.push({ type: 'code', language, content: codeLines.join('\n') });
-				i++;
-			}
-			// H1
-			else if (line.startsWith('# ')) {
-				result.push({ type: 'h1', content: line.substring(2) });
-				i++;
-			}
-			// H2
-			else if (line.startsWith('## ')) {
-				result.push({ type: 'h2', content: line.substring(3) });
-				i++;
-			}
-			// H3
-			else if (line.startsWith('### ')) {
-				result.push({ type: 'h3', content: line.substring(4) });
-				i++;
-			}
-			// HR
-			else if (line.trim() === '---') {
-				result.push({ type: 'hr' });
-				i++;
-			}
-			// Table
-			else if (line.includes('|') && line.trim().startsWith('|')) {
-				const tableLines = [];
-				while (i < lines.length && lines[i].includes('|')) {
-					tableLines.push(lines[i]);
-					i++;
-				}
-				result.push({ type: 'table', content: parseTable(tableLines) });
-			}
-			// Checkbox list
-			else if (line.trim().match(/^- \[[ x]\]/)) {
-				const listItems = [];
-				while (i < lines.length && lines[i].trim().match(/^- \[[ x]\]/)) {
-					const checked = lines[i].includes('[x]');
-					const text = lines[i].trim().substring(6);
-					listItems.push({ checked, text });
-					i++;
-				}
-				result.push({ type: 'checklist', content: listItems });
-			}
-			// Bullet list
-			else if (line.trim().startsWith('- ')) {
-				const listItems = [];
-				while (
-					i < lines.length &&
-					(lines[i].trim().startsWith('- ') || lines[i].trim().startsWith('  -'))
-				) {
-					const indent = lines[i].search(/\S/);
-					const text = lines[i].trim().substring(2);
-					listItems.push({ text, indent });
-					i++;
-				}
-				result.push({ type: 'list', content: listItems });
-			}
-			// Paragraph
-			else if (line.trim() !== '') {
-				result.push({ type: 'p', content: line });
-				i++;
-			}
-			// Empty line
-			else {
-				i++;
-			}
-		}
-
-		return result;
-	}
-
-	function parseTable(lines: string[]) {
-		if (lines.length < 2) return { headers: [], rows: [] };
-
-		const headers = lines[0]
-			.split('|')
-			.map((h) => h.trim())
-			.filter((h) => h !== '');
-
-		const rows = lines.slice(2).map((row) =>
-			row
-				.split('|')
-				.map((cell) => cell.trim())
-				.filter((cell) => cell !== '')
-		);
-
-		return { headers, rows };
-	}
-
-	function parseInlineFormatting(text: string) {
-		// Bold
-		text = text.replace(/\*\*(.*?)\*\*/g, '<strong class="font-semibold text-white">$1</strong>');
-		// Code
-		text = text.replace(
-			/`(.*?)`/g,
-			'<code class="bg-white/10 px-1.5 py-0.5 rounded text-sm font-mono text-[#ff6b35]">$1</code>'
-		);
-		return text;
-	}
 
 	// Reconstruct markdown from parsed blocks
 	function reconstructMarkdown(blocks: any[]): string {
@@ -418,6 +358,15 @@
 		const trimmedMessage = newMessageText.trim();
 		if (trimmedMessage === '' || isLoading) return;
 
+		// Get conversation data from localStorage
+		let conversationData = loadConversationData() || {
+			conversationId: CONVERSATION_ID,
+			userId: USER_ID,
+			referenceMessageId: REFERENCE_MESSAGE_ID,
+			timestamp: new Date().toISOString(),
+			messages: []
+		};
+
 		// Add user message to the UI
 		const userMessage: Message = {
 			id: Date.now(),
@@ -429,6 +378,9 @@
 		isLoading = true;
 		scrollToBottom();
 
+		// Use stored referenceMessageId or fallback to constant
+		const currentReferenceMessageId = conversationData.referenceMessageId || REFERENCE_MESSAGE_ID;
+
 		try {
 			// Send message to our SvelteKit backend
 			const response = await fetch('/api/server/chat', {
@@ -438,7 +390,7 @@
 					conversationId: CONVERSATION_ID,
 					message: trimmedMessage,
 					userId: USER_ID,
-					referenceMessageId: REFERENCE_MESSAGE_ID
+					referenceMessageId: currentReferenceMessageId
 				})
 			});
 
@@ -453,6 +405,12 @@
 						Role: 'Assistant'
 					};
 					messages = [...messages, assistantMessage];
+					
+					// Keep using the static referenceMessageId
+					conversationData.referenceMessageId = REFERENCE_MESSAGE_ID;
+					conversationData.messages = messages;
+					saveConversationData(conversationData);
+					
 					scrollToBottom();
 				}
 			} else {
@@ -463,6 +421,10 @@
 					Role: 'Assistant'
 				};
 				messages = [...messages, errorMessage];
+				
+				// Save messages even on error
+				conversationData.messages = messages;
+				saveConversationData(conversationData);
 			}
 		} catch (error) {
 			console.error('Error sending message:', error);
@@ -472,6 +434,10 @@
 				Role: 'Assistant'
 			};
 			messages = [...messages, errorMessage];
+			
+			// Save messages even on error
+			conversationData.messages = messages;
+			saveConversationData(conversationData);
 		} finally {
 			isLoading = false;
 		}
@@ -492,11 +458,13 @@
 		}
 	};
 
-	$: if (newMessageText !== undefined) {
-		adjustTextareaHeight();
-	}
+	$effect(() => {
+		if (newMessageText !== undefined) {
+			adjustTextareaHeight();
+		}
+	});
 
-	onMount(() => {
+	$effect(() => {
 		// Set initial height after component mounts
 		setTimeout(() => {
 			if (inputElement) {
@@ -508,6 +476,19 @@
 	const newChat = () => {
 		messages = [];
 		newMessageText = '';
+		parsedMessageContent.clear();
+		selectionState.clear();
+		
+		// Reset conversation data in localStorage
+		const conversationData = {
+			conversationId: CONVERSATION_ID,
+			userId: USER_ID,
+			referenceMessageId: REFERENCE_MESSAGE_ID,
+			timestamp: new Date().toISOString(),
+			messages: []
+		};
+		saveConversationData(conversationData);
+		
 		if (inputElement) {
 			inputElement.style.height = 'auto';
 			setTimeout(() => {
@@ -543,7 +524,7 @@
 
 		<div class="flex-1 overflow-x-hidden overflow-y-auto px-5 py-5">
 			<button
-				on:click={newChat}
+				onclick={newChat}
 				class="mb-8 flex w-full cursor-pointer items-center gap-3 rounded-xl border-none bg-gradient-to-br from-[#ff6b35] to-[#f7931e] px-4 py-3.5 text-sm font-semibold text-white shadow-[0_4px_12px_rgba(255,107,53,0.2)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_6px_20px_rgba(255,107,53,0.35)] active:translate-y-0"
 				style="transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);"
 			>
@@ -774,7 +755,7 @@
 													>
 													<button
 														class="rounded bg-white/5 px-2 py-1 text-xs text-white/40 transition-colors hover:text-white"
-														on:click={() => {
+														onclick={() => {
 															navigator.clipboard.writeText(block.content);
 														}}
 													>
@@ -804,7 +785,7 @@
 														>
 														<button
 															class="rounded bg-red-500/80 px-2 py-1 text-xs text-white transition-colors hover:bg-red-500"
-															on:click={() => deleteSelectedItems(message.id, blockIndex)}
+															onclick={() => deleteSelectedItems(message.id, blockIndex)}
 															title="Delete selected rows"
 														>
 															Delete Selected
@@ -818,7 +799,7 @@
 																<input
 																	type="checkbox"
 																	checked={selectedRowsCount === totalRows && totalRows > 0}
-																	on:change={() =>
+																	onchange={() =>
 																		toggleSelectAll(
 																			message.id,
 																			blockIndex,
@@ -838,7 +819,7 @@
 																		{#if block.content.headers.length > 1}
 																			<button
 																				class="rounded bg-white/20 px-1.5 py-0.5 text-xs text-white/60 opacity-0 transition-opacity group-hover/th:opacity-100 hover:bg-red-500/80 hover:text-white"
-																				on:click={() =>
+																				onclick={() =>
 																					deleteTableColumn(message.id, blockIndex, colIndex)}
 																				title="Delete column"
 																			>
@@ -877,7 +858,7 @@
 																			rowIdx,
 																			'table-rows'
 																		)}
-																		on:change={() =>
+																		onchange={() =>
 																			toggleSelection(message.id, blockIndex, rowIdx, 'table-rows')}
 																		class="h-4 w-4 cursor-pointer rounded border-white/30 bg-white/20 text-[#ff6b35] focus:ring-2 focus:ring-white/50"
 																	/>
@@ -890,7 +871,7 @@
 																<td class="px-2 py-3">
 																	<button
 																		class="rounded bg-white/10 px-2 py-1 text-xs text-white/60 opacity-0 transition-opacity group-hover/row:opacity-100 hover:bg-red-500/20 hover:text-red-400"
-																		on:click={() => deleteTableRow(message.id, blockIndex, rowIdx)}
+																		onclick={() => deleteTableRow(message.id, blockIndex, rowIdx)}
 																		title="Delete row"
 																	>
 																		<Icon icon="mdi:close" width="14" height="14" />
@@ -921,7 +902,7 @@
 															</span>
 															<button
 																class="ml-2 rounded bg-white/10 px-2 py-1 text-xs text-white/60 opacity-0 transition-opacity group-hover/item:opacity-100 hover:bg-red-500/20 hover:text-red-400"
-																on:click={() => deleteListItem(message.id, blockIndex, itemIndex)}
+																onclick={() => deleteListItem(message.id, blockIndex, itemIndex)}
 																title="Delete item"
 															>
 																<Icon icon="mdi:close" width="14" height="14" />
@@ -944,7 +925,7 @@
 															>
 															<button
 																class="ml-2 rounded bg-white/10 px-2 py-1 text-xs text-white/60 opacity-0 transition-opacity group-hover/item:opacity-100 hover:bg-red-500/20 hover:text-red-400"
-																on:click={() => deleteListItem(message.id, blockIndex, itemIndex)}
+																onclick={() => deleteListItem(message.id, blockIndex, itemIndex)}
 																title="Delete item"
 															>
 																<Icon icon="mdi:close" width="14" height="14" />
@@ -1017,10 +998,10 @@
 				<textarea
 					bind:this={inputElement}
 					bind:value={newMessageText}
-					on:keydown={handleKeydown}
-					on:input={adjustTextareaHeight}
-					on:focus={() => (inputFocused = true)}
-					on:blur={() => (inputFocused = false)}
+					onkeydown={handleKeydown}
+					oninput={adjustTextareaHeight}
+					onfocus={() => (inputFocused = true)}
+					onblur={() => (inputFocused = false)}
 					placeholder="Type your message here..."
 					class="flex-1 resize-none overflow-y-auto rounded-xl border-2 bg-white/5 px-4 py-3 text-[0.95rem] leading-[1.5] text-white transition-all duration-300 placeholder:text-white/40 {inputFocused
 						? 'border-[rgba(255,107,53,0.4)] bg-white/8 outline-none ring-2 ring-[rgba(255,107,53,0.2)]'
@@ -1031,7 +1012,7 @@
 				></textarea>
 
 				<button
-					on:click={sendMessage}
+					onclick={sendMessage}
 					disabled={!newMessageText.trim() || isLoading}
 					class="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl border-none transition-all duration-200 {newMessageText.trim() &&
 					!isLoading

@@ -11,14 +11,43 @@ export class ResponseHandler {
 
     /**
      * Parses the backend response and extracts the content text from the Contents array
-     * Handles various response structures and formats
+     * Handles various response structures and formats including new format with AssistantContent
      */
     static parseBackendResponse(response: any): string | null {
         if (!response) {
             return null;
         }
 
-        // Prefer nested content returned under Data.Contents[0].data.text
+        // Handle new format: Data array with AssistantContent
+        if (response?.Data && Array.isArray(response.Data) && response.Data.length > 0) {
+            const latestMessage = response.Data[response.Data.length - 1];
+            if (latestMessage.AssistantContent && Array.isArray(latestMessage.AssistantContent)) {
+                const contentParts: string[] = [];
+                for (const content of latestMessage.AssistantContent) {
+                    if (content.type === 'text' && content.data?.text) {
+                        contentParts.push(content.data.text.trim());
+                    }
+                }
+                if (contentParts.length > 0) {
+                    return contentParts.join('\n\n');
+                }
+            }
+        }
+
+        // Handle single message with AssistantContent
+        if (response?.Data?.AssistantContent && Array.isArray(response.Data.AssistantContent)) {
+            const contentParts: string[] = [];
+            for (const content of response.Data.AssistantContent) {
+                if (content.type === 'text' && content.data?.text) {
+                    contentParts.push(content.data.text.trim());
+                }
+            }
+            if (contentParts.length > 0) {
+                return contentParts.join('\n\n');
+            }
+        }
+
+        // Prefer nested content returned under Data.Contents[0].data.text (old format)
         const nestedContents = response?.Data?.Contents;
         if (Array.isArray(nestedContents) && nestedContents.length > 0) {
             // Combine all content items into a formatted string
