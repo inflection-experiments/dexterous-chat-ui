@@ -19,4 +19,3 @@ export const GET = async (event: RequestEvent) => {
 		return json({ error: 'Failed to fetch messages' }, { status: 500 });
 	}
 };
-

@@ -1,5 +1,5 @@
 import { json, type RequestEvent } from '@sveltejs/kit';
-import { sendMessageToMastra } from '../../services/chat.service.ts';
+import { sendMessageToMastra } from '../../services/chat.service';
 import { ResponseHandler } from '$lib/utils/response.handler';
 
 export const POST = async (event: RequestEvent) => {

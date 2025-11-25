@@ -10,7 +10,7 @@
 		reconstructMarkdown,
 		deleteTableRowFromBlocks,
 		deleteListItemFromBlocks
-	} from '$lib/utils/markdownParser.ts';
+	} from '$lib/utils/markdownParser';
 	import {
 		loadFromLocalStorage,
 		saveToLocalStorage,
@@ -18,18 +18,18 @@
 		saveConversationData,
 		addSelectedItems,
 		type SelectedItem
-	} from '$lib/utils/localStorage.ts';
+	} from '$lib/utils/localStorage';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 
 	let { data }: { data: PageServerData } = $props();
 
 	const userId = data.userId;
-	
+
 	// Static IDs from chat/+page.svelte
 	// const CONVERSATION_ID = '98b6495b-01fe-445f-804e-c20e1d3ba2d0';
 	const USER_ID = '74f22a5f-8ed2-45ce-af2e-ac4c32d824f4';
 	const REFERENCE_MESSAGE_ID = '123e4567-e89b-12d3-a456-426655440000';
-	
+
 	// Initialize conversations from page data and sort by CreatedAt
 	let conversations = $state<Conversation[]>(
 		(data.conversations || []).sort((a: any, b: any) => {
@@ -39,21 +39,21 @@
 			return dateB - dateA; // Most recent first
 		})
 	);
-	
+
 	// Log conversations on initial load and auto-select the latest conversation
 	let conversationsInitialized = $state(false);
 	$effect(() => {
 		if (!conversationsInitialized && conversations.length > 0) {
 			console.log('Initial conversations loaded:', conversations.length, conversations);
 			console.log('Data conversations:', data.conversations?.length || 0);
-			
+
 			// Auto-select the latest conversation (first in the sorted array)
 			const latestConversation = conversations[0];
 			if (latestConversation && latestConversation.id) {
 				console.log('Auto-selecting latest conversation:', latestConversation.id);
 				selectConversation(latestConversation.id);
 			}
-			
+
 			conversationsInitialized = true;
 		}
 	});
@@ -258,10 +258,149 @@
 		}
 	}
 
+	// Collect selected items from tables and format them for the message
+	function collectSelectedItems(messageId: number | string): string {
+		const selectedItems: any[] = [];
+
+		// Collect all selected table rows from the current message
+		const messageSelections = selectionState.get(messageId);
+		if (messageSelections) {
+			messageSelections.forEach((state, blockIndex) => {
+				if (state.type === 'table-rows' && state.selected.size > 0) {
+					const parsed = parsedMessageContent.get(messageId);
+					if (parsed && parsed[blockIndex]?.type === 'table') {
+						const table = parsed[blockIndex];
+						const selectedRows = Array.from(state.selected).map((rowIdx) => {
+							const row = table.content.rows[rowIdx];
+							const rowData: any = {};
+							table.content.headers.forEach((header: string, idx: number) => {
+								rowData[header] = row[idx];
+							});
+							return rowData;
+						});
+						selectedItems.push(...selectedRows);
+					}
+				}
+			});
+		}
+
+		if (selectedItems.length === 0) {
+			return '';
+		}
+
+		// Format selected items as a readable list
+		const itemsList = selectedItems
+			.map((item, idx) => {
+				const itemDetails = Object.entries(item)
+					.map(([key, value]) => `${key}: ${value}`)
+					.join(', ');
+				return `${idx + 1}. ${itemDetails}`;
+			})
+			.join('\n');
+
+		return itemsList;
+	}
+
+	// Send message to backend
+	async function sendButtonActionMessage(messageText: string) {
+		if (!selectedConversationId) {
+			alert('Please start a conversation first');
+			return;
+		}
+
+		const userMessage: Message = {
+			id: Date.now(),
+			Content: messageText,
+			Role: 'User'
+		};
+		messages = [...messages, userMessage];
+		isLoading = true;
+		scrollToBottom();
+
+		try {
+			const response = await fetch('/api/server/chat', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					conversationId: selectedConversationId,
+					message: messageText,
+					userId: USER_ID,
+					referenceMessageId: REFERENCE_MESSAGE_ID
+				})
+			});
+
+			if (response.ok) {
+				const result = await response.json();
+				console.log('Chat API response:', result);
+
+				// Handle new response format with AssistantContent array
+				let assistantContent = '';
+
+				if (result.Data && Array.isArray(result.Data) && result.Data.length > 0) {
+					const latestMessage = result.Data[result.Data.length - 1];
+					if (latestMessage.AssistantContent && Array.isArray(latestMessage.AssistantContent)) {
+						assistantContent = latestMessage.AssistantContent.filter(
+							(content: any) => content.type === 'text' && content.data?.text
+						)
+							.map((content: any) => content.data.text)
+							.join('\n');
+					}
+				} else if (result.Data?.AssistantContent && Array.isArray(result.Data.AssistantContent)) {
+					assistantContent = result.Data.AssistantContent.filter(
+						(content: any) => content.type === 'text' && content.data?.text
+					)
+						.map((content: any) => content.data.text)
+						.join('\n');
+				} else {
+					assistantContent =
+						result?.Content ||
+						result?.content ||
+						result?.message ||
+						result?.Message ||
+						result?.Data?.Content ||
+						'';
+				}
+
+				if (assistantContent) {
+					const assistantMessage: Message = {
+						id: Date.now() + 1,
+						Content: assistantContent,
+						Role: 'Assistant'
+					};
+					messages = [...messages, assistantMessage];
+
+					// Parse markdown for assistant message
+					parsedMessageContent.set(assistantMessage.id, parseMarkdown(assistantContent));
+					scrollToBottom();
+				} else {
+					console.warn('No assistant content found in response:', result);
+				}
+			} else {
+				console.error('Failed to send message:', response.statusText);
+				const errorMessage: Message = {
+					id: Date.now() + 1,
+					Content: 'Sorry, I encountered an error. Please try again.',
+					Role: 'Assistant'
+				};
+				messages = [...messages, errorMessage];
+			}
+		} catch (error) {
+			console.error('Error sending message:', error);
+			const errorMessage: Message = {
+				id: Date.now() + 1,
+				Content: 'Sorry, I encountered an error. Please try again.',
+				Role: 'Assistant'
+			};
+			messages = [...messages, errorMessage];
+		} finally {
+			isLoading = false;
+		}
+	}
+
 	// Handle button actions from markdown buttons
 	async function handleButtonAction(button: any, messageId: number | string) {
 		console.log('Button clicked:', button);
-		
+
 		try {
 			if (button.action === 'confirm') {
 				// Save the assistant message to local storage when user confirms
@@ -277,16 +416,18 @@
 							selectedItems: []
 						};
 					}
-					
+
 					// Find the assistant message by messageId
-					const assistantMessage = messages.find(msg => msg.id === messageId);
+					const assistantMessage = messages.find((msg) => msg.id === messageId);
 					if (assistantMessage && assistantMessage.Role === 'Assistant') {
 						if (!conversationData.messages) {
 							conversationData.messages = [];
 						}
-						
+
 						// Check if message already exists to avoid duplicates
-						const messageExists = conversationData.messages.some((msg: Message) => msg.id === messageId);
+						const messageExists = conversationData.messages.some(
+							(msg: Message) => msg.id === messageId
+						);
 						if (!messageExists) {
 							conversationData.messages = [...conversationData.messages, assistantMessage];
 							conversationData.referenceMessageId = REFERENCE_MESSAGE_ID;
@@ -295,39 +436,59 @@
 						}
 					}
 				}
-				
+
 				// Handle confirm action
-				if (button.operation === 'save' && button.payload) {
-					try {
-						const payload = JSON.parse(button.payload);
-						console.log('Saving with payload:', payload);
-						
-						// You can add API call here to save the data
-						// For now, just show a success message
-						// alert(`Saving ${payload.count || 'items'} to database...`);
-						
-						// Example API call (uncomment and modify as needed):
-						// const response = await fetch('/api/server/save-services', {
-						// 	method: 'POST',
-						// 	headers: { 'Content-Type': 'application/json' },
-						// 	body: JSON.stringify(payload)
-						// });
-						
-					} catch (error) {
-						console.error('Error parsing payload:', error);
-						alert('Error processing request');
+				if (button.operation === 'save') {
+					// Collect selected items from tables
+					const selectedItems = collectSelectedItems(messageId);
+
+					let messageText = '';
+					if (button.payload) {
+						try {
+							const payload = JSON.parse(button.payload);
+							const itemType = payload.itemType || 'services';
+							const count = payload.count || 0;
+
+							if (selectedItems) {
+								// If there are selected items, include them in the message
+								messageText = `I want to save these ${itemType}:\n\n${selectedItems}`;
+							} else {
+								// If no items selected, use the count from payload
+								messageText = `I want to save ${count} ${itemType} to the database.`;
+								if (payload.projectId) {
+									messageText += ` Project ID: ${payload.projectId}`;
+								}
+							}
+						} catch (error) {
+							console.error('Error parsing payload:', error);
+							messageText = selectedItems
+								? `I want to save these items:\n\n${selectedItems}`
+								: 'I want to save the items to the database.';
+						}
+					} else {
+						messageText = selectedItems
+							? `I want to save these items:\n\n${selectedItems}`
+							: 'I want to save the items to the database.';
 					}
+
+					// Send message to backend
+					await sendButtonActionMessage(messageText);
 				} else {
-					alert('Confirm action triggered');
+					// For other confirm actions, send a generic message
+					const messageText = button.text || 'I confirm this action.';
+					await sendButtonActionMessage(messageText);
 				}
 			} else if (button.action === 'modify') {
-				// Handle modify action
-				alert('Modify functionality - coming soon!');
-			} else if (button.action === 'cancel') {
-				// Handle cancel action
+				// Send modify request to backend
+				const messageText = button.text || 'I want to modify the items.';
+				await sendButtonActionMessage(messageText);
+			} else if (button.action === 'cancel' || button.action === 'cancell') {
+				// Cancel action - just log, don't send to backend
 				console.log('Action cancelled');
 			} else {
-				console.log('Unknown button action:', button.action);
+				// For unknown actions, send the button text as message
+				const messageText = button.text || `Action: ${button.action}`;
+				await sendButtonActionMessage(messageText);
 			}
 		} catch (error) {
 			console.error('Error handling button action:', error);
@@ -345,14 +506,14 @@
 	// Format date for display
 	function formatDate(dateString: string | undefined): string {
 		if (!dateString) return 'Unknown';
-		
+
 		const date = new Date(dateString);
-		
+
 		// Check if date is valid
 		if (isNaN(date.getTime())) {
 			return 'Invalid date';
 		}
-		
+
 		const now = new Date();
 		const diffMs = now.getTime() - date.getTime();
 		const diffMins = Math.floor(diffMs / 60000);
@@ -364,7 +525,7 @@
 		if (diffMins < 60) return `${diffMins} minute${diffMins !== 1 ? 's' : ''} ago`;
 		if (diffHours < 24) return `${diffHours} hour${diffHours !== 1 ? 's' : ''} ago`;
 		if (diffDays < 7) return `${diffDays} day${diffDays !== 1 ? 's' : ''} ago`;
-		
+
 		// For older dates, show formatted date with time
 		const options: Intl.DateTimeFormatOptions = {
 			year: 'numeric',
@@ -379,16 +540,21 @@
 	// Convert backend message format to UI Message format
 	function convertBackendMessageToUIMessage(backendMsg: any): Message[] {
 		const uiMessages: Message[] = [];
-		
+
 		console.log('Converting backend message:', backendMsg);
-		
+
 		// Extract user content
-		if (backendMsg.UserContent && Array.isArray(backendMsg.UserContent) && backendMsg.UserContent.length > 0) {
-			const userText = backendMsg.UserContent
-				.filter((content: any) => content.type === 'text' && content.data?.text)
+		if (
+			backendMsg.UserContent &&
+			Array.isArray(backendMsg.UserContent) &&
+			backendMsg.UserContent.length > 0
+		) {
+			const userText = backendMsg.UserContent.filter(
+				(content: any) => content.type === 'text' && content.data?.text
+			)
 				.map((content: any) => content.data.text)
 				.join('\n');
-			
+
 			if (userText.trim()) {
 				uiMessages.push({
 					id: `${backendMsg.id}-user`,
@@ -398,14 +564,19 @@
 				console.log('Added user message:', userText.substring(0, 50));
 			}
 		}
-		
+
 		// Extract assistant content
-		if (backendMsg.AssistantContent && Array.isArray(backendMsg.AssistantContent) && backendMsg.AssistantContent.length > 0) {
-			const assistantText = backendMsg.AssistantContent
-				.filter((content: any) => content.type === 'text' && content.data?.text)
+		if (
+			backendMsg.AssistantContent &&
+			Array.isArray(backendMsg.AssistantContent) &&
+			backendMsg.AssistantContent.length > 0
+		) {
+			const assistantText = backendMsg.AssistantContent.filter(
+				(content: any) => content.type === 'text' && content.data?.text
+			)
 				.map((content: any) => content.data.text)
 				.join('\n');
-			
+
 			if (assistantText.trim()) {
 				uiMessages.push({
 					id: `${backendMsg.id}-assistant`,
@@ -415,18 +586,18 @@
 				console.log('Added assistant message:', assistantText.substring(0, 50));
 			}
 		}
-		
+
 		// Fallback: if message already has Content and Role (old format or already converted)
 		// if (uiMessages.length === 0 && backendMsg.Content) {
-		// 	const content = typeof backendMsg.Content === 'string' 
-		// 		? backendMsg.Content 
+		// 	const content = typeof backendMsg.Content === 'string'
+		// 		? backendMsg.Content
 		// 		: JSON.stringify(backendMsg.Content);
-		// 	const role = backendMsg.Role === 'user' || backendMsg.Role === 'User' 
-		// 		? 'User' 
+		// 	const role = backendMsg.Role === 'user' || backendMsg.Role === 'User'
+		// 		? 'User'
 		// 		: backendMsg.Role === 'assistant' || backendMsg.Role === 'Assistant'
 		// 		? 'Assistant'
 		// 		: 'User';
-			
+
 		// 	uiMessages.push({
 		// 		id: backendMsg.id || Date.now(),
 		// 		Content: content,
@@ -434,7 +605,7 @@
 		// 	});
 		// 	console.log('Added fallback message with Content field');
 		// }
-		
+
 		return uiMessages;
 	}
 
@@ -450,33 +621,34 @@
 			// Load messages from API via server endpoint
 			const response = await fetch(`/api/server/conversations/${conversationId}/messages`);
 			console.log('Fetching messages for conversation:', conversationId);
-			
+
 			if (response.ok) {
 				const result = await response.json();
 				console.log('Messages API response (full):', JSON.stringify(result, null, 2));
-				
+
 				// Handle different response structures
 				let apiMessages: any[] = [];
-				
-			
-				if (result.Data && Array.isArray(result.Data)) {
+
+				// Check for Data.Items (paginated structure)
+				if (result.Data && result.Data.Items && Array.isArray(result.Data.Items)) {
+					apiMessages = result.Data.Items;
+					console.log('Found messages in result.Data.Items:', apiMessages.length);
+				} else if (result.Data && Array.isArray(result.Data)) {
 					apiMessages = result.Data;
 					console.log('Found messages in result.Data:', apiMessages.length);
-				} 
+				} else if (result.data && Array.isArray(result.data)) {
+					apiMessages = result.data;
+					console.log('Found messages in result.data:', apiMessages.length);
+				} else if (result.messages && Array.isArray(result.messages)) {
+					apiMessages = result.messages;
+					console.log('Found messages in result.messages:', apiMessages.length);
+				} else if (Array.isArray(result)) {
+					apiMessages = result;
+					console.log('Result is an array:', apiMessages.length);
+				}
 
-				// // Check for messages array
-				// else if (result.messages && Array.isArray(result.messages)) {
-				// 	apiMessages = result.messages;
-				// 	console.log('Found messages in result.messages:', apiMessages.length);
-				// }
-				// // Check if result itself is an array
-				// else if (Array.isArray(result)) {
-				// 	apiMessages = result;
-				// 	console.log('Result is an array:', apiMessages.length);
-				// }
-				
 				console.log('Extracted apiMessages:', apiMessages.length, apiMessages);
-				
+
 				if (Array.isArray(apiMessages) && apiMessages.length > 0) {
 					// Convert backend message format to UI message format
 					const convertedMessages: Message[] = [];
@@ -486,7 +658,7 @@
 						console.log(`Converted to ${uiMsgs.length} UI messages:`, uiMsgs);
 						convertedMessages.push(...uiMsgs);
 					});
-					
+
 					messages = convertedMessages;
 					console.log('Final converted messages:', messages.length, messages);
 
@@ -497,64 +669,22 @@
 						}
 					});
 
-					// Save messages to local storage
-					// const conversationData = getConversationData(STORAGE_KEY, conversationId) || {
-					// 	conversationId,
-					// 	userId: userId,
-					// 	referenceMessageId: REFERENCE_MESSAGE_ID,
-					// 	timestamp: new Date().toISOString(),
-					// 	messages: [],
-					// 	selectedItems: []
-					// };
-					// conversationData.messages = messages;
-					// saveConversationData(STORAGE_KEY, conversationId, conversationData);
-					
-					// // Scroll to bottom after messages are loaded
-					// await new Promise(resolve => setTimeout(resolve, 100));
-					// scrollToBottom();
+					// Scroll to bottom after messages are loaded
+					await new Promise((resolve) => setTimeout(resolve, 150));
+					scrollToBottom();
 				} else {
-					console.warn('No messages found in API response, trying local storage');
-					// Try loading from local storage if API returns empty
-					// const storedData = loadFromLocalStorage(STORAGE_KEY);
-					// if (storedData && storedData[conversationId] && storedData[conversationId].messages) {
-					// 	const storedMessages = storedData[conversationId].messages;
-					// 	if (Array.isArray(storedMessages) && storedMessages.length > 0) {
-					// 		messages = storedMessages;
-					// 		console.log('Loaded messages from local storage:', messages.length);
-							
-					// 		// Parse markdown for all loaded messages
-					// 		messages.forEach((msg) => {
-					// 			if (msg.Role === 'Assistant' && msg.Content) {
-					// 				parsedMessageContent.set(msg.id, parseMarkdown(msg.Content));
-					// 			}
-					// 		});
-					// 	}
-					// }
+					console.warn('No messages found in API response for conversation:', conversationId);
+					messages = [];
 				}
 			} else {
 				const errorText = await response.text();
 				console.error('Failed to fetch messages:', response.status, errorText);
-				// Try loading from local storage if API returns error
-				// const storedData = loadFromLocalStorage(STORAGE_KEY);
-				// if (storedData && storedData[conversationId] && storedData[conversationId].messages) {
-				// 	const storedMessages = storedData[conversationId].messages;
-				// 	if (Array.isArray(storedMessages) && storedMessages.length > 0) {
-				// 		messages = storedMessages;
-				// 		console.log('Loaded messages from local storage (fallback):', messages.length);
-						
-				// 		// Parse markdown for all loaded messages
-				// 		messages.forEach((msg) => {
-				// 			if (msg.Role === 'Assistant' && msg.Content) {
-				// 				parsedMessageContent.set(msg.id, parseMarkdown(msg.Content));
-				// 			}
-				// 		});
-				// 	}
-				// }
+				messages = [];
 			}
 
-			// Scroll to bottom after messages are loaded and rendered
-			await new Promise(resolve => setTimeout(resolve, 100));
-			// scrollToBottom();
+			// Scroll to bottom after messages are loaded and rendered (fallback)
+			await new Promise((resolve) => setTimeout(resolve, 150));
+			scrollToBottom();
 		} catch (error) {
 			console.error('Error loading conversation messages:', error);
 			// Fallback to local storage
@@ -564,14 +694,14 @@
 			// 	if (Array.isArray(storedMessages) && storedMessages.length > 0) {
 			// 		messages = storedMessages;
 			// 		console.log('Loaded messages from local storage (fallback):', messages.length);
-					
+
 			// 		// Parse markdown for all loaded messages
 			// 		messages.forEach((msg) => {
 			// 			if (msg.Role === 'Assistant' && msg.Content) {
 			// 				parsedMessageContent.set(msg.id, parseMarkdown(msg.Content));
 			// 			}
 			// 		});
-					
+
 			// 		// Scroll to bottom after messages are loaded
 			// 		await new Promise(resolve => setTimeout(resolve, 100));
 			// 		scrollToBottom();
@@ -579,8 +709,6 @@
 			// }
 		}
 	}
-
-
 
 	// Get parsed content for a message (caches parsed markdown)
 	function getParsedContent(messageId: number | string, content: string): any[] {
@@ -617,7 +745,7 @@
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify({
-						ProjectId: '8ad453ce-2fe8-4beb-91ce-0c55504edcc8',
+						ProjectId: 'df4c6df0-594a-4dcb-8754-49eead9743f3',
 						userId: userId
 					})
 				});
@@ -625,25 +753,21 @@
 				if (response.ok) {
 					const result = await response.json();
 					// Extract conversation ID from response
-					const newConversationId = result.Data?.id || result.data?.id || result.id || result.conversationId;
-					
+					const newConversationId =
+						result.Data?.id || result.data?.id || result.id || result.conversationId;
+
 					if (newConversationId) {
 						selectedConversationId = newConversationId;
-						// Initialize conversation data
-						// const conversationData = {
-						// 	conversationId: newConversationId,
-						// 	userId: userId,
-						// 	referenceMessageId: REFERENCE_MESSAGE_ID,
-						// 	timestamp: new Date().toISOString(),
-						// 	messages: [],
-						// 	selectedItems: []
-						// };
-						// saveConversationData(STORAGE_KEY, newConversationId, conversationData);
-						
+
+						// Clear messages and state for the new conversation
+						messages = [];
+						parsedMessageContent.clear();
+						selectionState.clear();
+
 						// Add to conversations list
 						const newConversation = {
 							id: newConversationId,
-							ProjectId: '8ad453ce-2fe8-4beb-91ce-0c55504edcc8',
+							ProjectId: 'df4c6df0-594a-4dcb-8754-49eead9743f3',
 							UserId: userId,
 							Status: 'active',
 							Context: {},
@@ -695,7 +819,7 @@
 			// Ensure conversationId is set to the selected one
 			conversationData.conversationId = selectedConversationId as string;
 		}
-		
+
 		// Save user message to local storage (commented as requested)
 		// if (!conversationData.messages) {
 		// 	conversationData.messages = [];
@@ -723,29 +847,37 @@
 			if (response.ok) {
 				const result = await response.json();
 				console.log('Chat API response:', result);
-				
+
 				// Handle new response format with AssistantContent array
 				let assistantContent = '';
-				
+
 				// Check for new format (AssistantContent array)
 				if (result.Data && Array.isArray(result.Data) && result.Data.length > 0) {
 					const latestMessage = result.Data[result.Data.length - 1];
 					if (latestMessage.AssistantContent && Array.isArray(latestMessage.AssistantContent)) {
-						assistantContent = latestMessage.AssistantContent
-							.filter((content: any) => content.type === 'text' && content.data?.text)
+						assistantContent = latestMessage.AssistantContent.filter(
+							(content: any) => content.type === 'text' && content.data?.text
+						)
 							.map((content: any) => content.data.text)
 							.join('\n');
 					}
 				} else if (result.Data?.AssistantContent && Array.isArray(result.Data.AssistantContent)) {
-					assistantContent = result.Data.AssistantContent
-						.filter((content: any) => content.type === 'text' && content.data?.text)
+					assistantContent = result.Data.AssistantContent.filter(
+						(content: any) => content.type === 'text' && content.data?.text
+					)
 						.map((content: any) => content.data.text)
 						.join('\n');
 				} else {
 					// Fallback to old format
-					assistantContent = result?.Content || result?.content || result?.message || result?.Message || result?.Data?.Content || '';
+					assistantContent =
+						result?.Content ||
+						result?.content ||
+						result?.message ||
+						result?.Message ||
+						result?.Data?.Content ||
+						'';
 				}
-				
+
 				if (assistantContent) {
 					const assistantMessage: Message = {
 						id: Date.now() + 1,
@@ -753,13 +885,13 @@
 						Role: 'Assistant'
 					};
 					messages = [...messages, assistantMessage];
-					
+
 					// Parse markdown for assistant message
 					parsedMessageContent.set(assistantMessage.id, parseMarkdown(assistantContent));
-					
+
 					// Don't save assistant message to local storage automatically
 					// It will be saved only when user confirms via button action
-					
+
 					scrollToBottom();
 				} else {
 					console.warn('No assistant content found in response:', result);
@@ -772,7 +904,7 @@
 					Role: 'Assistant'
 				};
 				messages = [...messages, errorMessage];
-				
+
 				// Save error message to local storage
 				let conversationData = getConversationData(STORAGE_KEY, selectedConversationId as string);
 				if (conversationData) {
@@ -791,7 +923,7 @@
 				Role: 'Assistant'
 			};
 			messages = [...messages, errorMessage];
-			
+
 			// Save error message to local storage
 			// let conversationData = getConversationData(STORAGE_KEY, selectedConversationId);
 			// if (conversationData) {
@@ -855,7 +987,7 @@
 			if (response.ok) {
 				// Remove conversation from list
 				conversations = conversations.filter((conv) => conv.id !== conversationToDelete);
-				
+
 				// If deleted conversation was selected, clear selection
 				if (selectedConversationId === conversationToDelete) {
 					selectedConversationId = null;
@@ -899,7 +1031,7 @@
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
-					ProjectId: '23fa2c4f-3462-4892-81c8-273e73d35e86',
+					ProjectId: 'df4c6df0-594a-4dcb-8754-49eead9743f3',
 					userId: userId // Use userId from page params
 				})
 			});
@@ -907,26 +1039,25 @@
 			const result = await response.json();
 			console.log('New conversation API response:', result);
 			if (response.ok) {
-				
 				// Extract conversation ID from response - handle different response structures
 				let newConversationId: string | null = null;
 				let newConversation: any = null;
-				
+
 				// Check for conversation object in response
 				if (result.Data && result.Data.id) {
 					newConversationId = result.Data.id;
 					newConversation = result.Data;
-				// } else if (result.data && result.data.id) {
-				// 	newConversationId = result.data.id;
-				// 	newConversation = result.data;
-				// } else if (result.id) {
-				// 	newConversationId = result.id;
-				// 	newConversation = result;
-				// } else if (result.conversationId) {
-				// 	newConversationId = result.conversationId;
-				// 	newConversation = result;
+					// } else if (result.data && result.data.id) {
+					// 	newConversationId = result.data.id;
+					// 	newConversation = result.data;
+					// } else if (result.id) {
+					// 	newConversationId = result.id;
+					// 	newConversation = result;
+					// } else if (result.conversationId) {
+					// 	newConversationId = result.conversationId;
+					// 	newConversation = result;
 				}
-				
+
 				if (newConversationId) {
 					// Set the new conversation as selected
 					selectedConversationId = newConversationId;
@@ -934,7 +1065,7 @@
 					newMessageText = '';
 					parsedMessageContent.clear();
 					selectionState.clear();
-					
+
 					// Initialize conversation data in local storage
 					// const conversationData = {
 					// 	conversationId: newConversationId,
@@ -945,14 +1076,14 @@
 					// 	selectedItems: []
 					// };
 					// saveConversationData(STORAGE_KEY, newConversationId, conversationData);
-					
+
 					// Add new conversation to the sidebar
 					// Use the conversation object from API if available, otherwise create one
 					if (newConversation) {
 						// Ensure it has the required fields
 						const conversationToAdd = {
 							id: newConversationId,
-							ProjectId: newConversation.ProjectId || '8ad453ce-2fe8-4beb-91ce-0c55504edcc8',
+							ProjectId: newConversation.ProjectId || 'df4c6df0-594a-4dcb-8754-49eead9743f3',
 							UserId: newConversation.UserId || userId,
 							Status: newConversation.Status || 'active',
 							Context: newConversation.Context || {},
@@ -965,24 +1096,24 @@
 							const dateB = new Date(b.CreatedAt || b.createdAt || 0).getTime();
 							return dateB - dateA; // Most recent first
 						});
-					// } else {
-					// 	// Fallback: create conversation object manually
-					// 	const conversationToAdd = {
-					// 		id: newConversationId,
-					// 		ProjectId: '8ad453ce-2fe8-4beb-91ce-0c55504edcc8',
-					// 		UserId: userId,
-					// 		Status: 'active',
-					// 		Context: {},
-					// 		CreatedAt: new Date().toISOString(),
-					// 		UpdatedAt: new Date().toISOString()
-					// 	};
-					// 	conversations = [conversationToAdd, ...conversations].sort((a: any, b: any) => {
-					// 		const dateA = new Date(a.CreatedAt || a.createdAt || 0).getTime();
-					// 		const dateB = new Date(b.CreatedAt || b.createdAt || 0).getTime();
-					// 		return dateB - dateA; // Most recent first
-					// 	});
+						// } else {
+						// 	// Fallback: create conversation object manually
+						// 	const conversationToAdd = {
+						// 		id: newConversationId,
+						// 		ProjectId: '8ad453ce-2fe8-4beb-91ce-0c55504edcc8',
+						// 		UserId: userId,
+						// 		Status: 'active',
+						// 		Context: {},
+						// 		CreatedAt: new Date().toISOString(),
+						// 		UpdatedAt: new Date().toISOString()
+						// 	};
+						// 	conversations = [conversationToAdd, ...conversations].sort((a: any, b: any) => {
+						// 		const dateA = new Date(a.CreatedAt || a.createdAt || 0).getTime();
+						// 		const dateB = new Date(b.CreatedAt || b.createdAt || 0).getTime();
+						// 		return dateB - dateA; // Most recent first
+						// 	});
 					}
-					
+
 					console.log('New conversation created and added to sidebar:', newConversationId);
 				} else {
 					console.error('No conversation ID in response:', result);
@@ -1016,7 +1147,11 @@
 			}
 		}, 0);
 		// Load conversations on mount only once if not already loaded
-		if (!conversationsLoaded && conversations.length === 0 && (!data.conversations || data.conversations.length === 0)) {
+		if (
+			!conversationsLoaded &&
+			conversations.length === 0 &&
+			(!data.conversations || data.conversations.length === 0)
+		) {
 			conversationsLoaded = true;
 			// loadingConversations();
 		}
@@ -1079,18 +1214,22 @@
 									onclick={() => selectConversation(conversation.id)}
 									class="flex flex-1 cursor-pointer items-center gap-3 px-3 py-3 text-left"
 								>
-									<div class="flex h-9 w-9 items-center justify-center rounded-lg bg-white/5 text-xl">
+									<div
+										class="flex h-9 w-9 items-center justify-center rounded-lg bg-white/5 text-xl"
+									>
 										💬
 									</div>
 									<div class="min-w-0 flex-1">
 										<div
-											class="mb-1 overflow-hidden text-sm font-medium text-ellipsis whitespace-nowrap text-white/90 font-mono"
+											class="mb-1 overflow-hidden font-mono text-sm font-medium text-ellipsis whitespace-nowrap text-white/90"
 											title={conversation.id}
 										>
 											{truncateUUID(conversation.id)}
 										</div>
 										<div class="text-xs text-white/40">
-											{formatDate((conversation as any).createdAt || (conversation as any).CreatedAt)}
+											{formatDate(
+												(conversation as any).createdAt || (conversation as any).CreatedAt
+											)}
 										</div>
 									</div>
 								</button>
@@ -1099,7 +1238,7 @@
 										e.stopPropagation();
 										deleteConversation(conversation.id);
 									}}
-									class="absolute right-2 opacity-0 transition-opacity duration-200 group-hover:opacity-100 rounded-lg bg-red-500/20 p-1.5 hover:bg-red-500/30 text-red-400"
+									class="absolute right-2 rounded-lg bg-red-500/20 p-1.5 text-red-400 opacity-0 transition-opacity duration-200 group-hover:opacity-100 hover:bg-red-500/30"
 									title="Delete conversation"
 								>
 									<Icon icon="mdi:delete-outline" width="18" height="18" />
@@ -1393,11 +1532,13 @@
 											<div class="my-4 flex flex-wrap gap-3">
 												{#each block.content as button}
 													<button
-														class="rounded-lg px-4 py-2.5 text-sm font-semibold text-white shadow-lg transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl {button.className === 'btn-primary'
+														class="rounded-lg px-4 py-2.5 text-sm font-semibold text-white shadow-lg transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl {button.className ===
+														'btn-primary'
 															? 'bg-gradient-to-br from-[#ff6b35] to-[#f7931e] shadow-[0_4px_12px_rgba(255,107,53,0.3)] hover:shadow-[0_6px_20px_rgba(255,107,53,0.4)]'
-															: button.className === 'btn-secondary' || button.className === 'btn-secondaryy'
-															? 'border border-white/20 bg-white/10 backdrop-blur-sm hover:bg-white/20'
-															: 'bg-gradient-to-br from-[#ff6b35] to-[#f7931e] shadow-[0_4px_12px_rgba(255,107,53,0.3)] hover:shadow-[0_6px_20px_rgba(255,107,53,0.4)]'}"
+															: button.className === 'btn-secondary' ||
+																  button.className === 'btn-secondaryy'
+																? 'border border-white/20 bg-white/10 backdrop-blur-sm hover:bg-white/20'
+																: 'bg-gradient-to-br from-[#ff6b35] to-[#f7931e] shadow-[0_4px_12px_rgba(255,107,53,0.3)] hover:shadow-[0_6px_20px_rgba(255,107,53,0.4)]'}"
 														onclick={() => handleButtonAction(button, message.id)}
 													>
 														{@html parseInlineFormatting(button.text)}
