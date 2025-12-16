@@ -11,14 +11,6 @@
 		deleteTableRowFromBlocks,
 		deleteListItemFromBlocks
 	} from '$lib/utils/markdownParser';
-	import {
-		loadFromLocalStorage,
-		saveToLocalStorage,
-		getConversationData,
-		saveConversationData,
-		addSelectedItems,
-		type SelectedItem
-	} from '$lib/utils/localStorage';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 
 	let { data }: { data: PageServerData } = $props();
@@ -48,6 +40,7 @@
 			console.log('Data conversations:', data.conversations?.length || 0);
 
 			// Auto-select the latest conversation (first in the sorted array)
+			// The title will be extracted when messages are loaded in selectConversation
 			const latestConversation = conversations[0];
 			if (latestConversation && latestConversation.id) {
 				console.log('Auto-selecting latest conversation:', latestConversation.id);
@@ -57,7 +50,7 @@
 			conversationsInitialized = true;
 		}
 	});
-	let selectedConversationId = $state();
+	let selectedConversationId = $state('');
 	let messages = $state<Message[]>([]);
 	let newMessageText = $state('');
 	let chatContainer = $state<HTMLElement | null>(null);
@@ -78,19 +71,19 @@
 		new Map<number | string, Map<number, { type: string; selected: Set<number> }>>()
 	);
 
-	// Local storage key
-	const STORAGE_KEY = `dexterous_conversations_${userId}`;
+	// Store conversation titles (first user message)
+	let conversationTitles = $state(new Map<string, string>());
 
-	// Save selected table rows to local storage
-	function saveSelectedRowsToStorage() {
+	// Save selected services to database via backend
+	async function saveSelectedRowsToStorage() {
 		if (!selectedConversationId) {
 			alert('Please start a conversation first');
 			return;
 		}
 
 		try {
-			// Get all selected items from all tables
-			const newSelectedItems: SelectedItem[] = [];
+			// Get all selected services from all tables
+			const selectedServices: any[] = [];
 
 			// Collect all selected table rows from all messages
 			selectionState.forEach((messageSelections, messageId) => {
@@ -99,42 +92,51 @@
 						const parsed = parsedMessageContent.get(messageId);
 						if (parsed && parsed[blockIndex]?.type === 'table') {
 							const table = parsed[blockIndex];
-							const selectedRows = Array.from(state.selected).map((rowIdx) => ({
-								headers: table.content.headers,
-								row: table.content.rows[rowIdx],
-								rowIndex: rowIdx
-							}));
-
-							newSelectedItems.push({
-								messageId: String(messageId),
-								blockIndex,
-								tableHeaders: table.content.headers,
-								selectedRows
+							const selectedRows = Array.from(state.selected).map((rowIdx) => {
+								const row = table.content.rows[rowIdx];
+								const serviceData: any = {};
+								table.content.headers.forEach((header: string, idx: number) => {
+									serviceData[header] = row[idx];
+								});
+								return serviceData;
 							});
+							selectedServices.push(...selectedRows);
 						}
 					}
 				});
 			});
 
-			if (newSelectedItems.length === 0) {
-				alert('No rows selected. Please select table rows first.');
+			if (selectedServices.length === 0) {
+				alert('No services selected. Please select services first.');
 				return;
 			}
 
-			// Save to local storage using utility function
-			addSelectedItems(STORAGE_KEY, selectedConversationId as string, newSelectedItems);
+			// Format services with their names for the message
+			// Try to find service name field (could be "Service Name", "Name", "#", etc.)
+			const serviceNames = selectedServices.map((service, idx) => {
+				// Try different possible name fields
+				const name =
+					service['Service Name'] ||
+					service['Name'] ||
+					service['serviceName'] ||
+					service['name'] ||
+					service['#'] ||
+					`Service ${idx + 1}`;
 
-			// Count total rows stored
-			const totalRows = newSelectedItems.reduce(
-				(sum: number, item) => sum + (item.selectedRows?.length || 0),
-				0
-			);
+				// Include description if available
+				const description =
+					service['Description'] || service['description'] || service['Description'] || '';
 
-			alert(
-				`Successfully stored ${totalRows} row(s) from ${newSelectedItems.length} table(s) to local storage!`
-			);
+				return description ? `${name}: ${description}` : name;
+			});
 
-			// Clear selections after storing
+			// Create message with selected services
+			const messageText = `I want to save these services to the database:\n\n${serviceNames.join('\n')}`;
+
+			// Send message to backend
+			await sendButtonActionMessage(messageText);
+
+			// Clear selections after sending
 			selectionState.forEach((messageSelections) => {
 				messageSelections.forEach((state) => {
 					if (state.type === 'table-rows') {
@@ -145,8 +147,8 @@
 			// Trigger reactivity
 			selectionState = new Map(selectionState);
 		} catch (error) {
-			console.error('Error saving to local storage:', error);
-			alert('Error saving to local storage. Please try again.');
+			console.error('Error saving services to database:', error);
+			alert('Error saving services to database. Please try again.');
 		}
 	}
 
@@ -403,40 +405,6 @@
 
 		try {
 			if (button.action === 'confirm') {
-				// Save the assistant message to local storage when user confirms
-				if (selectedConversationId) {
-					let conversationData = getConversationData(STORAGE_KEY, selectedConversationId as string);
-					if (!conversationData) {
-						conversationData = {
-							conversationId: selectedConversationId as string,
-							userId: userId,
-							referenceMessageId: REFERENCE_MESSAGE_ID,
-							timestamp: new Date().toISOString(),
-							messages: [],
-							selectedItems: []
-						};
-					}
-
-					// Find the assistant message by messageId
-					const assistantMessage = messages.find((msg) => msg.id === messageId);
-					if (assistantMessage && assistantMessage.Role === 'Assistant') {
-						if (!conversationData.messages) {
-							conversationData.messages = [];
-						}
-
-						// Check if message already exists to avoid duplicates
-						const messageExists = conversationData.messages.some(
-							(msg: Message) => msg.id === messageId
-						);
-						if (!messageExists) {
-							conversationData.messages = [...conversationData.messages, assistantMessage];
-							conversationData.referenceMessageId = REFERENCE_MESSAGE_ID;
-							saveConversationData(STORAGE_KEY, selectedConversationId as string, conversationData);
-							console.log('Assistant message saved to local storage after user confirmation');
-						}
-					}
-				}
-
 				// Handle confirm action
 				if (button.operation === 'save') {
 					// Collect selected items from tables
@@ -494,6 +462,34 @@
 			console.error('Error handling button action:', error);
 			alert('Error processing button action');
 		}
+	}
+
+	// Extract first user message from message structure
+	function extractFirstUserMessage(message: any): string {
+		if (!message) return '';
+		
+		// Check for UserContent array structure
+		if (message.UserContent && Array.isArray(message.UserContent) && message.UserContent.length > 0) {
+			const firstContent = message.UserContent[0];
+			if (firstContent.type === 'text' && firstContent.data?.text) {
+				return firstContent.data.text;
+			}
+		}
+		
+		// Fallback to Content field if available
+		if (message.Content) {
+			return typeof message.Content === 'string' ? message.Content : '';
+		}
+		
+		return '';
+	}
+
+
+	// Truncate text for display
+	function truncateText(text: string | undefined, maxLength: number = 50): string {
+		if (!text) return 'New conversation';
+		if (text.length <= maxLength) return text;
+		return text.substring(0, maxLength) + '...';
 	}
 
 	// Truncate UUID for display
@@ -650,6 +646,18 @@
 				console.log('Extracted apiMessages:', apiMessages.length, apiMessages);
 
 				if (Array.isArray(apiMessages) && apiMessages.length > 0) {
+					// Extract first user message for conversation title
+					if (!conversationTitles.has(conversationId)) {
+						for (const msg of apiMessages) {
+							const userMessage = extractFirstUserMessage(msg);
+							if (userMessage) {
+								conversationTitles.set(conversationId, userMessage);
+								conversationTitles = new Map(conversationTitles); // Trigger reactivity
+								break;
+							}
+						}
+					}
+
 					// Convert backend message format to UI message format
 					const convertedMessages: Message[] = [];
 					apiMessages.forEach((backendMsg: any, index: number) => {
@@ -799,33 +807,16 @@
 			Role: 'User'
 		};
 		messages = [...messages, userMessage];
+		
+		// Update conversation title if it doesn't have one yet
+		if (selectedConversationId && !conversationTitles.has(selectedConversationId)) {
+			conversationTitles.set(selectedConversationId, trimmedMessage);
+			conversationTitles = new Map(conversationTitles); // Trigger reactivity
+		}
+		
 		newMessageText = '';
 		isLoading = true;
 		scrollToBottom();
-
-		// Get or create conversation metadata from localStorage
-		let conversationData = getConversationData(STORAGE_KEY, selectedConversationId as string);
-		if (!conversationData) {
-			// Create new conversation data using the selected conversation ID
-			conversationData = {
-				conversationId: selectedConversationId as string, // Use the currently selected conversation ID
-				userId: USER_ID,
-				referenceMessageId: REFERENCE_MESSAGE_ID,
-				timestamp: new Date().toISOString(),
-				messages: [],
-				selectedItems: []
-			};
-		} else {
-			// Ensure conversationId is set to the selected one
-			conversationData.conversationId = selectedConversationId as string;
-		}
-
-		// Save user message to local storage (commented as requested)
-		// if (!conversationData.messages) {
-		// 	conversationData.messages = [];
-		// }
-		// conversationData.messages = [...conversationData.messages, userMessage];
-		// saveConversationData(STORAGE_KEY, selectedConversationId, conversationData);
 
 		// Use the currently selected conversation ID dynamically
 		const CURRENT_CONVERSATION_ID = selectedConversationId; // Use the selected conversation ID directly
@@ -904,16 +895,6 @@
 					Role: 'Assistant'
 				};
 				messages = [...messages, errorMessage];
-
-				// Save error message to local storage
-				let conversationData = getConversationData(STORAGE_KEY, selectedConversationId as string);
-				if (conversationData) {
-					if (!conversationData.messages) {
-						conversationData.messages = [];
-					}
-					conversationData.messages = [...conversationData.messages, errorMessage];
-					saveConversationData(STORAGE_KEY, selectedConversationId as string, conversationData);
-				}
 			}
 		} catch (error) {
 			console.error('Error sending message:', error);
@@ -923,16 +904,6 @@
 				Role: 'Assistant'
 			};
 			messages = [...messages, errorMessage];
-
-			// Save error message to local storage
-			// let conversationData = getConversationData(STORAGE_KEY, selectedConversationId);
-			// if (conversationData) {
-			// 	if (!conversationData.messages) {
-			// 		conversationData.messages = [];
-			// 	}
-			// 	conversationData.messages = [...conversationData.messages, errorMessage];
-			// 	saveConversationData(STORAGE_KEY, selectedConversationId, conversationData);
-			// }
 		} finally {
 			isLoading = false;
 		}
@@ -994,13 +965,6 @@
 					messages = [];
 					parsedMessageContent.clear();
 					selectionState.clear();
-				}
-
-				// Remove from local storage
-				const storedData = loadFromLocalStorage(STORAGE_KEY);
-				if (storedData && storedData[conversationToDelete]) {
-					delete storedData[conversationToDelete];
-					saveToLocalStorage(STORAGE_KEY, storedData);
 				}
 
 				console.log('Conversation deleted successfully:', conversationToDelete);
@@ -1065,17 +1029,6 @@
 					newMessageText = '';
 					parsedMessageContent.clear();
 					selectionState.clear();
-
-					// Initialize conversation data in local storage
-					// const conversationData = {
-					// 	conversationId: newConversationId,
-					// 	userId: userId,
-					// 	referenceMessageId: REFERENCE_MESSAGE_ID,
-					// 	timestamp: new Date().toISOString(),
-					// 	messages: [],
-					// 	selectedItems: []
-					// };
-					// saveConversationData(STORAGE_KEY, newConversationId, conversationData);
 
 					// Add new conversation to the sidebar
 					// Use the conversation object from API if available, otherwise create one
@@ -1165,7 +1118,7 @@
 	<!-- Sidebar -->
 	<aside
 		class="relative z-10 flex h-screen flex-col overflow-hidden border-r border-white/10 bg-[rgba(20,20,35,0.8)] backdrop-blur-xl transition-all duration-300 ease-out"
-		style="width: {sidebarOpen ? '280px' : '0'};"
+		style="width: {sidebarOpen ? '360px' : '0'};"
 	>
 		<div class="border-b border-white/10 px-5 py-6">
 			<div class="flex items-center gap-3">
@@ -1221,10 +1174,12 @@
 									</div>
 									<div class="min-w-0 flex-1">
 										<div
-											class="mb-1 overflow-hidden font-mono text-sm font-medium text-ellipsis whitespace-nowrap text-white/90"
-											title={conversation.id}
+											class="mb-1 overflow-hidden text-sm font-medium text-ellipsis whitespace-nowrap text-white/90"
+											title={conversationTitles.get(conversation.id) || conversation.id}
 										>
-											{truncateUUID(conversation.id)}
+										{conversationTitles.get(conversation.id) 
+											? truncateText(conversationTitles.get(conversation.id), 30)
+											: 'New conversation'}
 										</div>
 										<div class="text-xs text-white/40">
 											{formatDate(
@@ -1279,11 +1234,11 @@
 				class="relative flex h-full flex-col items-center justify-start px-8 pt-16 pb-1 text-center"
 			>
 				<div class="relative mb-12">
-					<div
+					<!-- <div
 						class="relative z-10 animate-bounce text-[5rem] drop-shadow-[0_10px_30px_rgba(255,107,53,0.3)]"
 					>
 						✨
-					</div>
+					</div> -->
 					<div
 						class="bg-gradient-radial absolute top-1/2 left-1/2 h-[200px] w-[200px] -translate-x-1/2 -translate-y-1/2 animate-pulse rounded-full from-[rgba(255,107,53,0.2)] to-transparent"
 					></div>
@@ -1567,7 +1522,7 @@
 					</div>
 				{/each}
 
-				{#if isLoading}
+				<!-- {#if isLoading}
 					<div class="mb-6 flex animate-[fadeInUp_0.4s_ease-out] items-start gap-3">
 						<div
 							class="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-[10px] bg-gradient-to-br from-[#ff6b35] to-[#f7931e] text-white shadow-[0_4px_12px_rgba(255,107,53,0.3)]"
@@ -1589,6 +1544,30 @@
 								<span
 									class="h-2 w-2 animate-[typing_1.4s_infinite_ease-in-out] rounded-full bg-white/60"
 								></span>
+								<span class="ml-2 text-xs text-white/60">Processing...</span>
+							</div>
+						</div>
+					</div>
+				{/if} -->
+				{#if isLoading}
+					<div class="mb-6 flex animate-[fadeInUp_0.4s_ease-out] items-start gap-3">
+						<!-- Icon bubble -->
+						<div
+							class="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-[10px] bg-gradient-to-br from-[#ff6b35] to-[#f7931e] text-white shadow-[0_4px_12px_rgba(255,107,53,0.3)]"
+						>
+							<Icon icon="mdi:layers" width="20" height="20" />
+						</div>
+
+						<!-- Chat bubble -->
+						<div
+							class="inline-block rounded-[18px] rounded-bl-sm border border-white/10 bg-white/8 px-4 py-4 shadow-[0_2px_8px_rgba(0,0,0,0.15)] backdrop-blur-md"
+						>
+							<div class="flex items-center gap-2">
+								<span class="loader-dot"></span>
+								<span class="loader-dot" style="animation-delay: 0.15s;"></span>
+								<span class="loader-dot" style="animation-delay: 0.3s;"></span>
+
+								<!-- <span class="ml-2 text-xs text-white/60">Processing...</span> -->
 							</div>
 						</div>
 					</div>
@@ -1631,6 +1610,25 @@
 					<Icon icon="mdi:send" width="20" height="20" />
 				</button>
 			</div>
+
+			<!-- {#if isLoading}
+				<div class="mx-auto mt-3 flex max-w-[1000px] items-center gap-2 text-xs text-white/60">
+					<div class="flex items-center gap-1">
+						<span
+							class="h-1.5 w-1.5 animate-[typing_1.4s_infinite_ease-in-out] rounded-full bg-white/60"
+							style="animation-delay: -0.32s;"
+						></span>
+						<span
+							class="h-1.5 w-1.5 animate-[typing_1.4s_infinite_ease-in-out] rounded-full bg-white/60"
+							style="animation-delay: -0.16s;"
+						></span>
+						<span
+							class="h-1.5 w-1.5 animate-[typing_1.4s_infinite_ease-in-out] rounded-full bg-white/60"
+						></span>
+					</div>
+					<span>Dexterous is processing your request...</span>
+				</div>
+			{/if} -->
 		</div>
 	</main>
 
@@ -1673,6 +1671,22 @@
 		}
 	}
 
+	.assistant-loading-icon {
+		animation: assistantPulse 1.2s infinite ease-in-out;
+	}
+
+	@keyframes assistantPulse {
+		0%,
+		100% {
+			transform: scale(1);
+			box-shadow: 0 4px 12px rgba(255, 107, 53, 0.3);
+		}
+		50% {
+			transform: scale(1.05) translateY(-1px);
+			box-shadow: 0 6px 18px rgba(255, 107, 53, 0.5);
+		}
+	}
+
 	:global(body) {
 		margin: 0;
 		padding: 0;
@@ -1699,5 +1713,27 @@
 	:global(textarea::placeholder) {
 		color: rgba(255, 255, 255, 0.4);
 		opacity: 1;
+	}
+
+	@keyframes bounceDot {
+		0%,
+		80%,
+		100% {
+			transform: translateY(0);
+			opacity: 0.4;
+		}
+		40% {
+			transform: translateY(-6px);
+			opacity: 1;
+		}
+	}
+
+	.loader-dot {
+		/* Tailwind-like styles, but in CSS since utilities can't define animations inline */
+		height: 0.5rem; /* h-2 */
+		width: 0.5rem; /* w-2 */
+		border-radius: 9999px; /* rounded-full */
+		background-color: rgba(255, 255, 255, 0.7); /* bg-white/70 */
+		animation: bounceDot 0.9s infinite ease-in-out;
 	}
 </style>
