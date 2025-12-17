@@ -161,6 +161,7 @@ export interface Conversation {
   updatedAt?: string;
   status?: 'active' | 'archived' | 'deleted';
   metadata?: MessageMetadata;
+  
 }
 
 // ========== Bot Configuration ==========
