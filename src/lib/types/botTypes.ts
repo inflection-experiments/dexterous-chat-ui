@@ -157,8 +157,16 @@ export interface Conversation {
   userId?: string;
   botId?: string;
   title?: string;
+  Title?: string; // Backend uses PascalCase
+  ProjectId?: string; // Backend field
+  ServiceId?: string | null; // Backend field
+  UserId?: string; // Backend field
+  Status?: string; // Backend field
+  Context?: any; // Backend field
   createdAt?: string;
   updatedAt?: string;
+  CreatedAt?: string; // Backend uses PascalCase
+  UpdatedAt?: string; // Backend uses PascalCase
   status?: 'active' | 'archived' | 'deleted';
   metadata?: MessageMetadata;
 }

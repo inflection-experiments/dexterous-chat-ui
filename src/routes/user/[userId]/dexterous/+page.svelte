@@ -464,6 +464,29 @@
 		}
 	}
 
+	// Handle interactive element actions (radio buttons, dropdowns)
+	async function handleInteractiveElementAction(element: any, messageId: number | string) {
+		console.log('Interactive element changed:', element);
+
+		try {
+			let messageText = '';
+			
+			if (element.type === 'radio') {
+				messageText = `I selected "${element.label}" for ${element.name}`;
+			} else if (element.type === 'dropdown') {
+				messageText = `I chose "${element.label}" from ${element.name}`;
+			}
+
+			// Send message to backend
+			if (messageText) {
+				await sendButtonActionMessage(messageText);
+			}
+		} catch (error) {
+			console.error('Error handling interactive element action:', error);
+			alert('Error processing selection');
+		}
+	}
+
 	// Extract first user message from message structure
 	function extractFirstUserMessage(message: any): string {
 		if (!message) return '';
@@ -1157,6 +1180,10 @@
 				{:else}
 					<div class="flex flex-col gap-2">
 						{#each conversations as conversation (conversation.id)}
+							{@const displayTitle = (conversation as any).Title || 
+								(conversation as any).title || 
+								conversationTitles.get(conversation.id) || 
+								'New conversation'}
 							<div
 								class="group relative flex w-full items-center gap-2 rounded-[10px] transition-all duration-200 hover:bg-white/8 {selectedConversationId ===
 								conversation.id
@@ -1175,11 +1202,9 @@
 									<div class="min-w-0 flex-1">
 										<div
 											class="mb-1 overflow-hidden text-sm font-medium text-ellipsis whitespace-nowrap text-white/90"
-											title={conversationTitles.get(conversation.id) || conversation.id}
+											title={displayTitle}
 										>
-										{conversationTitles.get(conversation.id) 
-											? truncateText(conversationTitles.get(conversation.id), 30)
-											: 'New conversation'}
+											{truncateText(displayTitle, 30)}
 										</div>
 										<div class="text-xs text-white/40">
 											{formatDate(
@@ -1468,13 +1493,13 @@
 															<span class="flex-1 text-white/90"
 																>{@html parseInlineFormatting(item.text)}</span
 															>
-															<button
+															<!-- <button
 																class="ml-2 rounded bg-white/10 px-2 py-1 text-xs text-white/60 opacity-0 transition-opacity group-hover/item:opacity-100 hover:bg-red-500/20 hover:text-red-400"
 																onclick={() => deleteListItem(message.id, blockIndex, itemIndex)}
 																title="Delete item"
 															>
 																<Icon icon="mdi:close" width="14" height="14" />
-															</button>
+															</button> -->
 														</li>
 													{/each}
 												</ul>
@@ -1498,6 +1523,80 @@
 													>
 														{@html parseInlineFormatting(button.text)}
 													</button>
+												{/each}
+											</div>
+										{:else if block.type === 'radio-group'}
+											<div class="my-4 space-y-4">
+												{#each block.content as radioGroup}
+													<div class="rounded-lg border border-white/10 bg-white/5 p-4">
+														{#if radioGroup.label}
+															<label class="mb-3 block text-sm font-semibold text-white/90">
+																{radioGroup.label}
+															</label>
+														{/if}
+														<div class="space-y-2">
+															{#each radioGroup.options as option, optIdx}
+																<label class="flex items-center gap-3 rounded-lg px-3 py-2 transition-colors hover:bg-white/5 cursor-pointer">
+																	<input
+																		type="radio"
+																		name="{radioGroup.name}-{message.id}-{blockIndex}"
+																		value={option.value}
+																		checked={option.checked}
+																		onchange={(e) => {
+																			if (radioGroup.action && e.currentTarget.checked) {
+																				handleInteractiveElementAction({
+																					action: radioGroup.action,
+																					type: 'radio',
+																					value: option.value,
+																					label: option.label,
+																					name: radioGroup.name
+																				}, message.id);
+																			}
+																		}}
+																		class="h-4 w-4 accent-[#ff6b35] cursor-pointer"
+																	/>
+																	<span class="text-sm text-white/90">{option.label}</span>
+																</label>
+															{/each}
+														</div>
+													</div>
+												{/each}
+											</div>
+										{:else if block.type === 'dropdown'}
+											<div class="my-4 space-y-4">
+												{#each block.content as dropdown}
+													<div class="rounded-lg border border-white/10 bg-white/5 p-4">
+														{#if dropdown.label}
+															<label class="mb-2 block text-sm font-semibold text-white/90">
+																{dropdown.label}
+															</label>
+														{/if}
+														<select
+															name="{dropdown.name}-{message.id}-{blockIndex}"
+															onchange={(e) => {
+																if (dropdown.action) {
+																	const selectedOption = dropdown.options.find(opt => opt.value === e.currentTarget.value);
+																	handleInteractiveElementAction({
+																		action: dropdown.action,
+																		type: 'dropdown',
+																		value: e.currentTarget.value,
+																		label: selectedOption?.label || e.currentTarget.value,
+																		name: dropdown.name
+																	}, message.id);
+																}
+															}}
+															class="w-full rounded-lg border border-white/20 bg-white/10 px-4 py-2.5 text-sm text-white backdrop-blur-sm transition-all focus:border-[#ff6b35] focus:outline-none focus:ring-2 focus:ring-[#ff6b35]/50"
+														>
+															{#if dropdown.placeholder}
+																<option value="" disabled selected>{dropdown.placeholder}</option>
+															{/if}
+															{#each dropdown.options as option}
+																<option value={option.value} selected={option.selected}>
+																	{option.label}
+																</option>
+															{/each}
+														</select>
+													</div>
 												{/each}
 											</div>
 										{/if}
