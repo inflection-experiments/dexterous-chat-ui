@@ -31,6 +31,33 @@ export interface ButtonData {
 	className?: string;
 }
 
+export interface RadioOption {
+	value: string;
+	label: string;
+	checked?: boolean;
+}
+
+export interface RadioGroup {
+	name: string;
+	label?: string;
+	options: RadioOption[];
+	action?: string;
+}
+
+export interface DropdownOption {
+	value: string;
+	label: string;
+	selected?: boolean;
+}
+
+export interface Dropdown {
+	name: string;
+	label?: string;
+	placeholder?: string;
+	options: DropdownOption[];
+	action?: string;
+}
+
 /**
  * Extract HTML buttons from text content (handles multi-line HTML)
  */
@@ -80,6 +107,161 @@ function extractButtons(text: string): { buttons: ButtonData[]; cleanedText: str
 	}
 	
 	return { buttons, cleanedText: cleanedText.trim() };
+}
+
+/**
+ * Extract radio groups from HTML content
+ */
+function extractRadioGroups(text: string): { radioGroups: RadioGroup[]; cleanedText: string } {
+	const radioGroups: RadioGroup[] = [];
+	let cleanedText = text;
+	
+	// Match radio group containers (divs with radio-group class or similar)
+	const radioGroupRegex = /<div[^>]*(?:class="[^"]*radio[^"]*"|data-type="radio-group")[^>]*>([\s\S]*?)<\/div>/gi;
+	let groupMatch;
+	
+	while ((groupMatch = radioGroupRegex.exec(text)) !== null) {
+		const groupHtml = groupMatch[1];
+		const fullMatch = groupMatch[0];
+		
+		// Extract name attribute
+		const nameMatch = fullMatch.match(/name="([^"]*)"/i) || fullMatch.match(/data-name="([^"]*)"/i);
+		const name = nameMatch ? nameMatch[1] : `radio-group-${radioGroups.length}`;
+		
+		// Extract label
+		const labelMatch = fullMatch.match(/data-label="([^"]*)"/i) || groupHtml.match(/<label[^>]*>([\s\S]*?)<\/label>/i);
+		const label = labelMatch ? labelMatch[1].replace(/<[^>]*>/g, '').trim() : undefined;
+		
+		// Extract action
+		const actionMatch = fullMatch.match(/data-action="([^"]*)"/i);
+		const action = actionMatch ? actionMatch[1] : undefined;
+		
+		// Extract radio options
+		const radioRegex = /<input[^>]*type="radio"[^>]*>/gi;
+		const options: RadioOption[] = [];
+		let radioMatch;
+		
+		while ((radioMatch = radioRegex.exec(groupHtml)) !== null) {
+			const radioHtml = radioMatch[0];
+			const valueMatch = radioHtml.match(/value="([^"]*)"/i);
+			const checkedMatch = radioHtml.match(/checked/i);
+			
+			// Find label for this radio (next label element or label with for attribute)
+			const radioIdMatch = radioHtml.match(/id="([^"]*)"/i);
+			let labelText = '';
+			if (radioIdMatch) {
+				const labelForRegex = new RegExp(`<label[^>]*for="${radioIdMatch[1]}"[^>]*>([\\s\\S]*?)<\\/label>`, 'i');
+				const labelForMatch = groupHtml.match(labelForRegex);
+				if (labelForMatch) {
+					labelText = labelForMatch[1].replace(/<[^>]*>/g, '').trim();
+				}
+			}
+			
+			// If no label found, try to find next text node or label
+			if (!labelText) {
+				const afterRadio = groupHtml.substring(radioMatch.index + radioMatch[0].length);
+				const nextLabelMatch = afterRadio.match(/<label[^>]*>([\s\S]*?)<\/label>/i);
+				if (nextLabelMatch) {
+					labelText = nextLabelMatch[1].replace(/<[^>]*>/g, '').trim();
+				}
+			}
+			
+			if (valueMatch) {
+				options.push({
+					value: valueMatch[1],
+					label: labelText || valueMatch[1],
+					checked: !!checkedMatch
+				});
+			}
+		}
+		
+		if (options.length > 0) {
+			radioGroups.push({
+				name,
+				label,
+				options,
+				action
+			});
+			cleanedText = cleanedText.replace(fullMatch, '');
+		}
+	}
+	
+	return { radioGroups, cleanedText: cleanedText.trim() };
+}
+
+/**
+ * Extract dropdowns from HTML content
+ */
+function extractDropdowns(text: string): { dropdowns: Dropdown[]; cleanedText: string } {
+	const dropdowns: Dropdown[] = [];
+	let cleanedText = text;
+	
+	// Match select elements (dropdowns)
+	const selectRegex = /<select[^>]*>([\s\S]*?)<\/select>/gi;
+	let selectMatch;
+	
+	while ((selectMatch = selectRegex.exec(text)) !== null) {
+		const fullMatch = selectMatch[0];
+		const optionsHtml = selectMatch[1];
+		
+		// Extract name attribute
+		const nameMatch = fullMatch.match(/name="([^"]*)"/i) || fullMatch.match(/data-name="([^"]*)"/i);
+		const name = nameMatch ? nameMatch[1] : `dropdown-${dropdowns.length}`;
+		
+		// Extract label (look for preceding label element)
+		const beforeSelect = text.substring(0, selectMatch.index);
+		const labelMatch = beforeSelect.match(/<label[^>]*>([\s\S]*?)<\/label>\s*$/i) || 
+		                  fullMatch.match(/data-label="([^"]*)"/i);
+		const label = labelMatch ? labelMatch[1].replace(/<[^>]*>/g, '').trim() : undefined;
+		
+		// Extract placeholder
+		const placeholderMatch = fullMatch.match(/data-placeholder="([^"]*)"/i);
+		const placeholder = placeholderMatch ? placeholderMatch[1] : undefined;
+		
+		// Extract action
+		const actionMatch = fullMatch.match(/data-action="([^"]*)"/i);
+		const action = actionMatch ? actionMatch[1] : undefined;
+		
+		// Extract options
+		const optionRegex = /<option[^>]*value="([^"]*)"[^>]*>([\s\S]*?)<\/option>/gi;
+		const options: DropdownOption[] = [];
+		let optionMatch;
+		
+		while ((optionMatch = optionRegex.exec(optionsHtml)) !== null) {
+			const optionHtml = optionMatch[0];
+			const value = optionMatch[1];
+			const labelText = optionMatch[2].replace(/<[^>]*>/g, '').trim();
+			const selectedMatch = optionHtml.match(/selected/i);
+			
+			options.push({
+				value,
+				label: labelText || value,
+				selected: !!selectedMatch
+			});
+		}
+		
+		// Also handle placeholder option
+		const placeholderOptionMatch = optionsHtml.match(/<option[^>]*disabled[^>]*>([\s\S]*?)<\/option>/i);
+		if (placeholderOptionMatch && !placeholder) {
+			const placeholderText = placeholderOptionMatch[1].replace(/<[^>]*>/g, '').trim();
+			if (placeholderText) {
+				// This will be used as placeholder
+			}
+		}
+		
+		if (options.length > 0 || placeholder) {
+			dropdowns.push({
+				name,
+				label,
+				placeholder: placeholder || (placeholderOptionMatch ? placeholderOptionMatch[1].replace(/<[^>]*>/g, '').trim() : undefined),
+				options,
+				action
+			});
+			cleanedText = cleanedText.replace(fullMatch, '');
+		}
+	}
+	
+	return { dropdowns, cleanedText: cleanedText.trim() };
 }
 
 export function parseMarkdown(md: string): ParsedBlock[] {
@@ -148,30 +330,49 @@ export function parseMarkdown(md: string): ParsedBlock[] {
 		}
 	}
 	
-	// Post-process: check for buttons in paragraph blocks that might span multiple lines
-	// This handles cases where buttons are embedded in the markdown text
+	// Post-process: check for buttons, radio groups, and dropdowns in paragraph blocks that might span multiple lines
+	// This handles cases where interactive elements are embedded in the markdown text
 	const finalResult: ParsedBlock[] = [];
 	let accumulatedText = '';
 	
 	for (let j = 0; j < result.length; j++) {
 		const block = result[j];
 		if (block.type === 'p' && block.content) {
-			// Accumulate paragraph text to handle multi-line button HTML
+			// Accumulate paragraph text to handle multi-line HTML
 			accumulatedText += (accumulatedText ? '\n' : '') + block.content;
 		} else {
 			// When we hit a non-paragraph block, process accumulated text
 			if (accumulatedText) {
-				const { buttons, cleanedText } = extractButtons(accumulatedText);
-				if (buttons.length > 0) {
-					// Add text content if any remains
-					if (cleanedText.trim()) {
-						finalResult.push({ type: 'p', content: cleanedText });
-					}
-					// Add buttons block
-					finalResult.push({ type: 'buttons', content: buttons });
-				} else if (accumulatedText.trim()) {
-					finalResult.push({ type: 'p', content: accumulatedText });
+				let processedText = accumulatedText;
+				
+				// Extract buttons
+				const { buttons, cleanedText: textAfterButtons } = extractButtons(processedText);
+				processedText = textAfterButtons;
+				
+				// Extract radio groups
+				const { radioGroups, cleanedText: textAfterRadios } = extractRadioGroups(processedText);
+				processedText = textAfterRadios;
+				
+				// Extract dropdowns
+				const { dropdowns, cleanedText: textAfterDropdowns } = extractDropdowns(processedText);
+				processedText = textAfterDropdowns;
+				
+				// Add text content if any remains
+				if (processedText.trim()) {
+					finalResult.push({ type: 'p', content: processedText });
 				}
+				
+				// Add interactive elements
+				if (buttons.length > 0) {
+					finalResult.push({ type: 'buttons', content: buttons });
+				}
+				if (radioGroups.length > 0) {
+					finalResult.push({ type: 'radio-group', content: radioGroups });
+				}
+				if (dropdowns.length > 0) {
+					finalResult.push({ type: 'dropdown', content: dropdowns });
+				}
+				
 				accumulatedText = '';
 			}
 			finalResult.push(block);
@@ -180,14 +381,34 @@ export function parseMarkdown(md: string): ParsedBlock[] {
 	
 	// Process any remaining accumulated text
 	if (accumulatedText) {
-		const { buttons, cleanedText } = extractButtons(accumulatedText);
+		let processedText = accumulatedText;
+		
+		// Extract buttons
+		const { buttons, cleanedText: textAfterButtons } = extractButtons(processedText);
+		processedText = textAfterButtons;
+		
+		// Extract radio groups
+		const { radioGroups, cleanedText: textAfterRadios } = extractRadioGroups(processedText);
+		processedText = textAfterRadios;
+		
+		// Extract dropdowns
+		const { dropdowns, cleanedText: textAfterDropdowns } = extractDropdowns(processedText);
+		processedText = textAfterDropdowns;
+		
+		// Add text content if any remains
+		if (processedText.trim()) {
+			finalResult.push({ type: 'p', content: processedText });
+		}
+		
+		// Add interactive elements
 		if (buttons.length > 0) {
-			if (cleanedText.trim()) {
-				finalResult.push({ type: 'p', content: cleanedText });
-			}
 			finalResult.push({ type: 'buttons', content: buttons });
-		} else if (accumulatedText.trim()) {
-			finalResult.push({ type: 'p', content: accumulatedText });
+		}
+		if (radioGroups.length > 0) {
+			finalResult.push({ type: 'radio-group', content: radioGroups });
+		}
+		if (dropdowns.length > 0) {
+			finalResult.push({ type: 'dropdown', content: dropdowns });
 		}
 	}
 

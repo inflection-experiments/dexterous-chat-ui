@@ -52,6 +52,18 @@
 	let conversationsInitialized = $state(false);
 	$effect(() => {
 		if (!conversationsInitialized && conversations.length > 0) {
+			// Extract titles from conversation objects
+			conversations.forEach((conv) => {
+				// Check for Title field (capital T) from backend
+				const title = (conv as any).Title || (conv as any).title;
+				if (title && !conversationTitles.has(conv.id)) {
+					conversationTitles.set(conv.id, title);
+				}
+			});
+			
+			// Trigger reactivity
+			conversationTitles = new Map(conversationTitles);
+			
 			const latest = conversations[0];
 			if (latest?.id) {
 				selectConversation(latest.id);

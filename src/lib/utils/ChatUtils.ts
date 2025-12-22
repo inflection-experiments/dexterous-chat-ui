@@ -1,5 +1,3 @@
-// lib/utils/chatUtils.ts
-
 import type { Message } from '$lib/types/chat';
 import type { Conversation } from '$lib/types/botTypes';
 
@@ -49,7 +47,7 @@ export const convertBackendMessageToUIMessage = (backendMsg: any): Message[] => 
 
 	const addMessage = (contentArray: any[], role: 'User' | 'Assistant', suffix: string) => {
 		if (!Array.isArray(contentArray)) return;
-		
+
 		const text = contentArray
 			.filter((c: any) => c.type === 'text' && c.data?.text)
 			.map((c: any) => c.data.text)
@@ -185,7 +183,12 @@ export const createSelectionState = () => {
 			return blockState;
 		},
 
-		toggle: (messageId: number | string, blockIndex: number, itemIndex: number, itemType: string) => {
+		toggle: (
+			messageId: number | string,
+			blockIndex: number,
+			itemIndex: number,
+			itemType: string
+		) => {
 			const blockState = this.get(messageId, blockIndex, itemType);
 			if (blockState.selected.has(itemIndex)) {
 				blockState.selected.delete(itemIndex);
@@ -195,14 +198,24 @@ export const createSelectionState = () => {
 			return new Map(state);
 		},
 
-		isSelected: (messageId: number | string, blockIndex: number, itemIndex: number, itemType?: string): boolean => {
+		isSelected: (
+			messageId: number | string,
+			blockIndex: number,
+			itemIndex: number,
+			itemType?: string
+		): boolean => {
 			const blockState = state.get(messageId)?.get(blockIndex);
 			if (!blockState) return false;
 			if (itemType && blockState.type !== itemType) return false;
 			return blockState.selected.has(itemIndex);
 		},
 
-		toggleAll: (messageId: number | string, blockIndex: number, totalItems: number, itemType: string) => {
+		toggleAll: (
+			messageId: number | string,
+			blockIndex: number,
+			totalItems: number,
+			itemType: string
+		) => {
 			const blockState = this.get(messageId, blockIndex, itemType);
 			const allSelected = blockState.selected.size === totalItems && totalItems > 0;
 			if (allSelected) {
@@ -239,4 +252,65 @@ export const sortConversations = (conversations: Conversation[]): Conversation[]
 
 export const extractConversationId = (result: any): string | null => {
 	return result.Data?.id || result.data?.id || result.id || result.conversationId || null;
+};
+
+/**
+ * Extract title from a conversation object
+ * Checks multiple possible fields where title might be stored
+ */
+export const extractConversationTitle = (conversation: any): string | null => {
+	if (!conversation) return null;
+
+	// Check various possible title fields (case-insensitive)
+	const title =
+		conversation.title ||
+		conversation.Title ||
+		conversation.name ||
+		conversation.Name ||
+		conversation.subject ||
+		conversation.Subject;
+
+	return title || null;
+};
+
+/**
+ * Extract titles from conversations and return a map of conversationId -> title
+ * This can be used on initial load to populate titles from backend data
+ */
+export const extractConversationTitles = async (
+	conversations: Conversation[],
+	fetchMessagesFn?: (conversationId: string) => Promise<any>
+): Promise<Map<string, string>> => {
+	const titles = new Map<string, string>();
+
+	for (const conv of conversations) {
+		// First, try to get title from conversation object
+		const titleFromConv = extractConversationTitle(conv);
+		if (titleFromConv) {
+			titles.set(conv.id, titleFromConv);
+			continue;
+		}
+
+		// If no title in conversation object and fetch function provided, try to get first message
+		if (fetchMessagesFn) {
+			try {
+				const messagesResult = await fetchMessagesFn(conv.id);
+				const messages = extractMessagesFromResponse(messagesResult);
+
+				// Find first user message
+				for (const msg of messages) {
+					const userMessage = extractFirstUserMessage(msg);
+					if (userMessage) {
+						titles.set(conv.id, userMessage);
+						break;
+					}
+				}
+			} catch (error) {
+				console.warn(`Failed to fetch title for conversation ${conv.id}:`, error);
+				// Continue with other conversations
+			}
+		}
+	}
+
+	return titles;
 };

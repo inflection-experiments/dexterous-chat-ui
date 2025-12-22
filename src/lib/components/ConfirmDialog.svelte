@@ -44,9 +44,10 @@
 	// Variant-based button styles
 	const getConfirmButtonStyles = () => {
 		if (confirmButtonClass) return confirmButtonClass;
-		
-		const baseStyles = 'flex-1 rounded-lg px-4 py-2.5 text-sm font-semibold text-white shadow-lg transition-all duration-200 hover:shadow-xl disabled:opacity-50';
-		
+
+		const baseStyles =
+			'flex-1 rounded-lg px-4 py-2.5 text-sm font-semibold text-white shadow-lg transition-all duration-200 hover:shadow-xl disabled:opacity-50';
+
 		switch (variant) {
 			case 'danger':
 				return `${baseStyles} bg-gradient-to-br from-red-500 to-red-600`;
@@ -90,22 +91,13 @@
 				</p>
 			</div>
 			<div class="flex gap-3">
-				<button
-					onclick={handleCancel}
-					disabled={isLoading}
-					class={getCancelButtonStyles()}
-				>
+				<button onclick={handleCancel} disabled={isLoading} class={getCancelButtonStyles()}>
 					{cancelText}
 				</button>
-				<button
-					onclick={handleConfirm}
-					disabled={isLoading}
-					class={getConfirmButtonStyles()}
-				>
+				<button onclick={handleConfirm} disabled={isLoading} class={getConfirmButtonStyles()}>
 					{isLoading ? 'Processing...' : confirmText}
 				</button>
 			</div>
 		</div>
 	</div>
 {/if}
-

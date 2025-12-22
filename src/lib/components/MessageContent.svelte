@@ -1,11 +1,10 @@
-<!-- lib/components/MessageContent.svelte -->
 <script lang="ts">
 	import { parseInlineFormatting } from '$lib/utils/markdownParser';
-	import CodeBlock from './Blocks/CodeBlock.svelte';
-	import TableBlock from './Blocks/TableBlock.svelte';
+	import CodeBlock from './blocks/CodeBlock.svelte';
+	import TableBlock from './blocks/TableBlock.svelte';
 	import ListBlock from './blocks/ListBlock.svelte';
 	import ChecklistBlock from './blocks/ChecklistBlock.svelte';
-	// import CodeBlock from './blocks/CodeBlock.svelte';
+	// import CodeBlock from './Blocks/CodeBlock.svelte';
 	import ButtonBlock from './blocks/ButtonBlock.svelte';
 
 	let {
@@ -30,7 +29,9 @@
 <div class="mb-2 text-[0.95rem] leading-[1.7] text-white">
 	{#each parsedContent as block, blockIndex}
 		{#if block.type === 'h1'}
-			<h1 class="mt-4 mb-3 border-b-2 border-[#ff6b35] pb-2 text-2xl font-bold text-white first:mt-0">
+			<h1
+				class="mt-4 mb-3 border-b-2 border-[#ff6b35] pb-2 text-2xl font-bold text-white first:mt-0"
+			>
 				{@html parseInlineFormatting(block.content)}
 			</h1>
 		{:else if block.type === 'h2'}
@@ -55,25 +56,11 @@
 				{onSaveSelected}
 			/>
 		{:else if block.type === 'checklist'}
-			<ChecklistBlock
-				items={block.content}
-				{messageId}
-				{blockIndex}
-				onDelete={onDeleteItem}
-			/>
+			<ChecklistBlock items={block.content} {messageId} {blockIndex} onDelete={onDeleteItem} />
 		{:else if block.type === 'list'}
-			<ListBlock
-				items={block.content}
-				{messageId}
-				{blockIndex}
-				onDelete={onDeleteItem}
-			/>
+			<ListBlock items={block.content} {messageId} {blockIndex} onDelete={onDeleteItem} />
 		{:else if block.type === 'buttons'}
-			<ButtonBlock
-				buttons={block.content}
-				{messageId}
-				onClick={onButtonAction}
-			/>
+			<ButtonBlock buttons={block.content} {messageId} onClick={onButtonAction} />
 		{:else if block.type === 'p'}
 			<p class="my-2 leading-relaxed text-white/90">
 				{@html parseInlineFormatting(block.content)}
