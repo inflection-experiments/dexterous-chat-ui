@@ -1,11 +1,10 @@
 <script lang="ts">
 	import { parseInlineFormatting } from '$lib/utils/markdownParser';
-	import CodeBlock from './blocks/CodeBlock.svelte';
-	import TableBlock from './blocks/TableBlock.svelte';
-	import ListBlock from './blocks/ListBlock.svelte';
-	import ChecklistBlock from './blocks/ChecklistBlock.svelte';
-	// import CodeBlock from './Blocks/CodeBlock.svelte';
-	import ButtonBlock from './blocks/ButtonBlock.svelte';
+	import CodeBlock from '$lib/components/blocks/CodeBlock.svelte';
+	import TableBlock from '$lib/components/blocks/TableBlock.svelte';
+	import ListBlock from '$lib/components/blocks/ListBlock.svelte';
+	import ChecklistBlock from '$lib/components/blocks/ChecklistBlock.svelte';
+	import ButtonBlock from '$lib/components/blocks/ButtonBlock.svelte';
 
 	let {
 		parsedContent,

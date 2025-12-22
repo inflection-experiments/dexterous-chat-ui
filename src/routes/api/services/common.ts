@@ -95,16 +95,47 @@ export const delete_ = async (url: string) => {
 			method: 'DELETE',
 			headers
 		});
+
+		// Check if response is ok before parsing
+		if (!res.ok) {
+			const errorText = await res.text();
+			let errorData;
+			try {
+				errorData = JSON.parse(errorText);
+			} catch {
+				errorData = { message: errorText || res.statusText || 'Failed to delete' };
+			}
+			console.error(`API Error: ${res.status} - ${errorData.message || errorData.Message || res.statusText}`);
+			return {
+				Status: 'error',
+				status: 'error',
+				Message: errorData.message || errorData.Message || 'Failed to delete',
+				message: errorData.message || errorData.Message || 'Failed to delete',
+				HttpCode: res.status,
+				httpCode: res.status
+			};
+		}
+
+		// Handle empty response (204 No Content)
+		if (res.status === 204 || res.headers.get('content-length') === '0') {
+			return {
+				Status: 'success',
+				status: 'success',
+				Message: 'Deleted successfully',
+				message: 'Deleted successfully'
+			};
+		}
+
+		// Parse JSON response
 		const response = await res.json();
 		console.log('Response from dexterous service backend', JSON.stringify(response, null, 2));
-
-		if (!response.ok) {
-			console.error(`API Error: ${response.Message || response.statusText}`);
-			return response;
-		}
 		return response;
 	} catch (err) {
 		console.error(`Fetch Exception: ${err}`);
+		// Re-throw SvelteKit errors as-is, wrap others
+		if (err && typeof err === 'object' && 'status' in err) {
+			throw err;
+		}
 		throw error(500, { message: 'Internal Server Error' });
 	}
 };

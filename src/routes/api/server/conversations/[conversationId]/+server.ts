@@ -20,13 +20,22 @@ export const DELETE = async (event: RequestEvent) => {
 				message: backendResponse.Message || backendResponse.message || 'Conversation deleted successfully' 
 			}, { status: 200 });
 		} else {
+			// Return error response with appropriate status code
+			const statusCode = backendResponse?.HttpCode || backendResponse?.httpCode || 500;
 			return json({ 
 				status: 'error', 
-				message: backendResponse.Message || backendResponse.message || 'Failed to delete conversation' 
-			}, { status: backendResponse.HttpCode || backendResponse.httpCode || 500 });
+				message: backendResponse?.Message || backendResponse?.message || 'Failed to delete conversation' 
+			}, { status: statusCode });
 		}
-	} catch (error) {
+	} catch (error: any) {
 		console.error('Error in delete conversation API server endpoint:', error);
+		
+		// If it's already an HttpError from SvelteKit, return it
+		if (error?.status) {
+			return ResponseHandler.handleError(error.status, null, error);
+		}
+		
+		// Otherwise, return a 500 error
 		return ResponseHandler.handleError(500, null, error);
 	}
 };
