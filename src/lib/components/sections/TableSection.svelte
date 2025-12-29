@@ -1,53 +1,39 @@
 <script lang="ts">
+	import type { TableSection } from '$lib/types/structuredResponse';
 	import Icon from '@iconify/svelte';
 	import { parseInlineFormatting } from '$lib/utils/markdownParser';
 
 	let {
-		block,
+		section,
 		messageId,
-		blockIndex,
+		blockIndex = 0,
 		selectionState,
-		// onDeleteRow,
-		// onSaveSelected
+		onDeleteRow,
+		onSaveSelected
 	}: {
-		block: any;
+		section: TableSection;
 		messageId: number | string;
-		blockIndex: number;
-		selectionState: any;
-		onDeleteRow: (messageId: number | string, blockIndex: number, rowIndex: number) => void;
-		onSaveSelected: () => void;
+		blockIndex?: number;
+		selectionState?: any;
+		onDeleteRow?: (messageId: number | string, blockIndex: number, rowIndex: number) => void;
+		onSaveSelected?: () => void;
 	} = $props();
 
 	const getSelectedCount = () => {
+		if (!selectionState) return 0;
 		const state = selectionState.get(messageId)?.get(blockIndex);
 		if (!state || state.type !== 'table-rows') return 0;
 		return state.selected.size || 0;
 	};
 
 	const isSelected = (rowIdx: number) => {
+		if (!selectionState) return false;
 		const state = selectionState.get(messageId)?.get(blockIndex);
 		if (!state || state.type !== 'table-rows') return false;
 		return state.selected.has(rowIdx);
 	};
 
-	const toggleSelection = (rowIdx: number) => {
-		// This will be handled by parent - just emit event
-		const event = new CustomEvent('toggle-selection', {
-			detail: { messageId, blockIndex, rowIdx, itemType: 'table-rows' }
-		});
-		window.dispatchEvent(event);
-	};
-
-	const toggleSelectAll = () => {
-		const totalRows = block.content.rows.length;
-		const event = new CustomEvent('toggle-select-all', {
-			detail: { messageId, blockIndex, totalRows, itemType: 'table-rows' }
-		});
-		window.dispatchEvent(event);
-	};
-
 	let selectedRowsCount = $derived(getSelectedCount());
-	let totalRows = $derived(block.content.rows.length);
 </script>
 
 <div class="group relative my-4 overflow-x-auto rounded-lg border border-white/20 shadow-sm">
@@ -61,21 +47,27 @@
 		</div>
 	{/if}
 
+	{#if section.caption}
+		<div class="mb-2 text-sm text-white/60 italic">{section.caption}</div>
+	{/if}
+
 	<table class="min-w-full border-collapse divide-y divide-white/10">
 		<thead class="bg-gradient-to-r from-[#ff6b35] to-[#f7931e]">
 			<tr>
-				{#each block.content.headers as header, colIdx}
+				{#each section.headers as header, colIdx}
 					<th
 						class="px-4 py-3 text-left text-sm font-semibold tracking-wider text-white {colIdx === 0 ? 'w-16' : colIdx === 1 ? 'min-w-[150px]' : colIdx === 2 ? 'min-w-[200px]' : colIdx === 3 ? 'w-24' : 'min-w-[300px]'}"
 					>
 						{@html parseInlineFormatting(header)}
 					</th>
 				{/each}
-				<th class="w-12 px-2 py-3"></th>
+				{#if onDeleteRow}
+					<th class="w-12 px-2 py-3"></th>
+				{/if}
 			</tr>
 		</thead>
 		<tbody class="divide-y divide-white/10 bg-white/5">
-			{#each block.content.rows as row, rowIdx}
+			{#each section.rows as row, rowIdx}
 				<tr
 					class="group/row {rowIdx % 2 === 0
 						? 'bg-white/5 hover:bg-white/10'
@@ -99,21 +91,23 @@
 							</div>
 						</td>
 					{/each}
-					<td class="px-2 py-3 align-middle">
-						<button
-							class="rounded bg-white/10 px-2 py-1 text-xs text-white/60 opacity-0 transition-opacity group-hover/row:opacity-100 hover:bg-red-500/20 hover:text-red-400"
-							onclick={() => onDeleteRow(messageId, blockIndex, rowIdx)}
-							title="Delete row"
-						>
-							<Icon icon="mdi:close" width="14" height="14" />
-						</button>
-					</td>
+					{#if onDeleteRow}
+						<td class="px-2 py-3 align-middle">
+							<button
+								class="rounded bg-white/10 px-2 py-1 text-xs text-white/60 opacity-0 transition-opacity group-hover/row:opacity-100 hover:bg-red-500/20 hover:text-red-400"
+								onclick={() => onDeleteRow(messageId, blockIndex, rowIdx)}
+								title="Delete row"
+							>
+								<Icon icon="mdi:close" width="14" height="14" />
+							</button>
+						</td>
+					{/if}
 				</tr>
 			{/each}
 		</tbody>
 	</table>
 
-	{#if selectedRowsCount > 0}
+	{#if selectedRowsCount > 0 && onSaveSelected}
 		<div class="mt-3 flex justify-end px-4 pb-4">
 			<button
 				onclick={onSaveSelected}
@@ -125,3 +119,6 @@
 		</div>
 	{/if}
 </div>
+
+
+

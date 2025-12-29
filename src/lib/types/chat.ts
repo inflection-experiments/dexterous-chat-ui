@@ -1,7 +1,10 @@
+import type { StructuredResponse } from './structuredResponse';
+
 export interface Message {
   id: number | string;
   Content: string;
   Role: 'User' | 'Assistant';
+  StructuredResponse?: StructuredResponse; // Optional structured response for Assistant messages
 }
 
 export interface ChatContent {
@@ -24,16 +27,4 @@ export interface ChatResponse {
   content: string;
   role: 'user' | 'assistant';
   timestamp: string;
-}
-
-export interface StructuredResponse {
-  Message: string;
-  Data?: any[];
-  ResponseFormat?: 'json' | 'sql' | 'image' | 'table' | 'text';
-  Metadata?: {
-    inputType?: string;
-    hasInputData?: boolean;
-    confidence?: number;
-  };
-  SuggestedActions?: string[];
 }

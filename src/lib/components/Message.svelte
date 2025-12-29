@@ -2,6 +2,7 @@
 	import type { Message } from '$lib/types/chat';
 	import Icon from '@iconify/svelte';
 	import MessageContent from './MessageContent.svelte';
+	import StructuredMessageContent from './StructuredMessageContent.svelte';
 
 	let {
 		message,
@@ -11,7 +12,8 @@
 		onButtonAction,
 		onDeleteRow,
 		onDeleteItem,
-		onSaveSelected
+		onSaveSelected,
+		// onDropdownChange
 	}: {
 		message: Message;
 		userId: string;
@@ -21,9 +23,12 @@
 		onDeleteRow: (messageId: number | string, blockIndex: number, rowIndex: number) => void;
 		onDeleteItem: (messageId: number | string, blockIndex: number, itemIndex: number) => void;
 		onSaveSelected: () => void;
+		// onDropdownChange?: (dropdown: any, selectedValue: string, messageId: number | string) => void;
+		// onRadioChange?: (radioGroup: any, selectedValue: string, messageId: number | string) => void;
 	} = $props();
 
 	const isUser = message.Role === 'User';
+	const useStructured = !isUser && message.StructuredResponse;
 </script>
 
 <div
@@ -55,15 +60,27 @@
 			<div
 				class="rounded-[18px] rounded-bl-sm border border-white/10 bg-white/8 px-4 py-4 shadow-[0_2px_8px_rgba(0,0,0,0.15)] backdrop-blur-md"
 			>
-				<MessageContent
-					messageId={message.id}
-					{parsedContent}
-					{selectionState}
-					{onButtonAction}
-					{onDeleteRow}
-					{onDeleteItem}
-					{onSaveSelected}
-				/>
+				{#if useStructured && message.StructuredResponse}
+					<StructuredMessageContent
+						structuredResponse={message.StructuredResponse}
+						messageId={message.id}
+						{selectionState}
+						{onButtonAction}
+						{onDeleteRow}
+						{onDeleteItem}
+						{onSaveSelected}
+					/>
+				{:else}
+					<MessageContent
+						messageId={message.id}
+						{parsedContent}
+						{selectionState}
+						{onButtonAction}
+						{onDeleteRow}
+						{onDeleteItem}
+						{onSaveSelected}
+					/>
+				{/if}
 				<div class="mt-2 text-[0.7rem] text-white/40">
 					{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
 				</div>

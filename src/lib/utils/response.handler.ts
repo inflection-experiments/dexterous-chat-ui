@@ -1,5 +1,6 @@
 import type { Message } from '$lib/types/chat';
 import { json } from '@sveltejs/kit';
+import { stripMarkdownCodeBlock } from '$lib/utils/ChatUtils';
 
 export class ResponseHandler {
     static success(response: any): Response {
@@ -29,7 +30,7 @@ export class ResponseHandler {
                     }
                 }
                 if (contentParts.length > 0) {
-                    return contentParts.join('\n\n');
+                    return stripMarkdownCodeBlock(contentParts.join('\n\n'));
                 }
             }
         }
@@ -43,7 +44,7 @@ export class ResponseHandler {
                 }
             }
             if (contentParts.length > 0) {
-                return contentParts.join('\n\n');
+                return stripMarkdownCodeBlock(contentParts.join('\n\n'));
             }
         }
 
@@ -77,19 +78,19 @@ export class ResponseHandler {
             }
 
             if (contentParts.length > 0) {
-                return contentParts.join('\n\n');
+                return stripMarkdownCodeBlock(contentParts.join('\n\n'));
             }
         }
 
         // Other generic fallbacks
         if (response && response.content) {
-            return response.content;
+            return stripMarkdownCodeBlock(response.content);
         }
         if (response && response.message) {
-            return response.message;
+            return stripMarkdownCodeBlock(response.message);
         }
         if (response && response.Message) {
-            return response.Message;
+            return stripMarkdownCodeBlock(response.Message);
         }
 
         return null;

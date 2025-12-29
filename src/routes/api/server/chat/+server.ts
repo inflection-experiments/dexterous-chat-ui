@@ -21,7 +21,8 @@ export const POST = async (event: RequestEvent) => {
 			data.referenceMessageId
 		);
 
-		return ResponseHandler.formatServerResponse(backendResponse);
+		// Pass through the backend response so the client can render structured content
+		return ResponseHandler.success(backendResponse);
 	} catch (error) {
 		console.error('Error in chat API server endpoint:', error);
 		return ResponseHandler.handleError(500, null, error);

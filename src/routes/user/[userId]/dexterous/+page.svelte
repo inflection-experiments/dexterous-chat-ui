@@ -3,15 +3,15 @@
 	import type { Conversation } from '$lib/types/botTypes';
 	import Icon from '@iconify/svelte';
 	import type { PageServerData } from './$types';
-	import { parseMarkdown, reconstructMarkdown, deleteTableRowFromBlocks, deleteListItemFromBlocks } from '$lib/utils/markdownParser';
+	import { parseMarkdown } from '$lib/utils/markdownParser';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import MessageComponent from '$lib/components/Message.svelte';
 	import {
 		sortConversations,
 		extractConversationId,
-		extractAssistantContent,
 		extractFirstUserMessage,
+		buildAssistantMessageFromResult,
 		convertBackendMessageToUIMessage,
 		extractMessagesFromResponse,
 		sendChatMessage,
@@ -112,16 +112,16 @@
 		return parsedMessageContent.get(messageId)!;
 	};
 
-	const updateMessageContent = (messageId: number | string) => {
-		const parsed = parsedMessageContent.get(messageId);
-		if (parsed) {
-			const newContent = reconstructMarkdown(parsed);
-			messages = messages.map((msg) =>
-				msg.id === messageId ? { ...msg, Content: newContent } : msg
-			);
-			parsedMessageContent.set(messageId, [...parsed]);
-		}
-	};
+	// const updateMessageContent = (messageId: number | string) => {
+	// 	const parsed = parsedMessageContent.get(messageId);
+	// 	if (parsed) {
+	// 		const newContent = reconstructMarkdown(parsed);
+	// 		messages = messages.map((msg) =>
+	// 			msg.id === messageId ? { ...msg, Content: newContent } : msg
+	// 		);
+	// 		parsedMessageContent.set(messageId, [...parsed]);
+	// 	}
+	// };
 
 	// Message Operations
 	const addUserMessage = (content: string): Message => {
@@ -140,19 +140,18 @@
 		return userMessage;
 	};
 
-	const addAssistantMessage = (content: string) => {
-		const assistantMessage: Message = {
-			id: Date.now() + 1,
-			Content: content,
-			Role: 'Assistant'
-		};
-		messages = [...messages, assistantMessage];
-		parsedMessageContent.set(assistantMessage.id, parseMarkdown(content));
-		return assistantMessage;
+	const addAssistantMessage = (message: Message) => {
+		messages = [...messages, message];
+		parsedMessageContent.set(message.id, parseMarkdown(message.Content));
+		return message;
 	};
 
 	const addErrorMessage = () => {
-		addAssistantMessage('Sorry, I encountered an error. Please try again.');
+		addAssistantMessage({
+			id: Date.now(),
+			Content: 'Sorry, I encountered an error. Please try again.',
+			Role: 'Assistant'
+		});
 	};
 
 	// API Handlers
@@ -204,10 +203,10 @@
 
 		try {
 			const result = await sendChatMessage(selectedConversationId, trimmedMessage, USER_ID, REFERENCE_MESSAGE_ID);
-			const content = extractAssistantContent(result);
+			const assistantMessage = buildAssistantMessageFromResult(result, Date.now() + 1);
 
-			if (content) {
-				addAssistantMessage(content);
+			if (assistantMessage) {
+				addAssistantMessage(assistantMessage);
 				scrollToBottom();
 			} else {
 				console.warn('No assistant content found in response');
@@ -353,165 +352,241 @@
 		selectionState = selectionManager.toggle(messageId, blockIndex, itemIndex, itemType);
 	};
 
-	const handleDeleteTableRow = (messageId: number | string, blockIndex: number, rowIndex: number) => {
-		const parsed = parsedMessageContent.get(messageId);
-		if (parsed && parsed[blockIndex]?.type === 'table') {
-			const newParsed = deleteTableRowFromBlocks(parsed, blockIndex, rowIndex);
-			parsedMessageContent.set(messageId, newParsed);
-			updateMessageContent(messageId);
-		}
-	};
+	// const handleDeleteTableRow = (messageId: number | string, blockIndex: number, rowIndex: number) => {
+	// 	const parsed = parsedMessageContent.get(messageId);
+	// 	if (parsed && parsed[blockIndex]?.type === 'table') {
+	// 		const newParsed = deleteTableRowFromBlocks(parsed, blockIndex, rowIndex);
+	// 		parsedMessageContent.set(messageId, newParsed);
+	// 		updateMessageContent(messageId);
+	// 	}
+	// };
 
-	const handleDeleteListItem = (messageId: number | string, blockIndex: number, itemIndex: number) => {
-		const parsed = parsedMessageContent.get(messageId);
-		if (parsed && (parsed[blockIndex]?.type === 'list' || parsed[blockIndex]?.type === 'checklist')) {
-			const newParsed = deleteListItemFromBlocks(parsed, blockIndex, itemIndex);
-			parsedMessageContent.set(messageId, newParsed);
-			updateMessageContent(messageId);
-		}
-	};
+	// const handleDeleteListItem = (messageId: number | string, blockIndex: number, itemIndex: number) => {
+	// 	const parsed = parsedMessageContent.get(messageId);
+	// 	if (parsed && (parsed[blockIndex]?.type === 'list' || parsed[blockIndex]?.type === 'checklist')) {
+	// 		const newParsed = deleteListItemFromBlocks(parsed, blockIndex, itemIndex);
+	// 		parsedMessageContent.set(messageId, newParsed);
+	// 		updateMessageContent(messageId);
+	// 	}
+	// };
 
-	const collectSelectedItems = (messageId: number | string): string => {
-		const selectedItems: any[] = [];
-		const messageSelections = selectionState.get(messageId);
+	// const collectSelectedItems = (messageId: number | string): string => {
+	// 	const selectedItems: any[] = [];
+	// 	const messageSelections = selectionState.get(messageId);
 		
-		if (messageSelections) {
-			messageSelections.forEach((state, blockIndex) => {
-				if (state.type === 'table-rows' && state.selected.size > 0) {
-					const parsed = parsedMessageContent.get(messageId);
-					if (parsed && parsed[blockIndex]?.type === 'table') {
-						const table = parsed[blockIndex];
-						const selectedRows = Array.from(state.selected).map((rowIdx) => {
-							const row = table.content.rows[rowIdx];
-							const rowData: any = {};
-							table.content.headers.forEach((header: string, idx: number) => {
-								rowData[header] = row[idx];
-							});
-							return rowData;
-						});
-						selectedItems.push(...selectedRows);
-					}
-				}
-			});
-		}
+	// 	if (messageSelections) {
+	// 		messageSelections.forEach((state, blockIndex) => {
+	// 			if (state.type === 'table-rows' && state.selected.size > 0) {
+	// 				const parsed = parsedMessageContent.get(messageId);
+	// 				if (parsed && parsed[blockIndex]?.type === 'table') {
+	// 					const table = parsed[blockIndex];
+	// 					const selectedRows = Array.from(state.selected).map((rowIdx) => {
+	// 						const row = table.content.rows[rowIdx];
+	// 						const rowData: any = {};
+	// 						table.content.headers.forEach((header: string, idx: number) => {
+	// 							rowData[header] = row[idx];
+	// 						});
+	// 						return rowData;
+	// 					});
+	// 					selectedItems.push(...selectedRows);
+	// 				}
+	// 			}
+	// 		});
+	// 	}
 
-		if (selectedItems.length === 0) return '';
+	// 	if (selectedItems.length === 0) return '';
 
-		return selectedItems
-			.map((item, idx) => {
-				const itemDetails = Object.entries(item)
-					.map(([key, value]) => `${key}: ${value}`)
-					.join(', ');
-				return `${idx + 1}. ${itemDetails}`;
-			})
-			.join('\n');
-	};
+	// 	return selectedItems
+	// 		.map((item, idx) => {
+	// 			const itemDetails = Object.entries(item)
+	// 				.map(([key, value]) => `${key}: ${value}`)
+	// 				.join(', ');
+	// 			return `${idx + 1}. ${itemDetails}`;
+	// 		})
+	// 		.join('\n');
+	// };
 
-	const handleButtonAction = async (button: any, messageId: number | string) => {
-		if (!selectedConversationId) {
-			alert('Please start a conversation first');
-			return;
-		}
+	// const handleRadioChange = async (
+	// 	radioGroup: any,
+	// 	selectedValue: string,
+	// 	messageId: number | string
+	// ) => {
+	// 	if (!selectedConversationId) {
+	// 		alert('Please start a conversation first');
+	// 		return;
+	// 	}
 
-		try {
-			let messageText = '';
+	// 	try {
+	// 		const selectedOption = radioGroup.options.find((opt: any) => opt.value === selectedValue);
+	// 		const messageText = `Selected ${radioGroup.label || radioGroup.name}: ${selectedOption?.label || selectedValue}`;
+	// 		addUserMessage(messageText);
+	// 		isLoading = true;
+	// 		scrollToBottom();
 
-			if (button.action === 'confirm' && button.operation === 'save') {
-				const selectedItems = collectSelectedItems(messageId);
+	// 		const result = await sendChatMessage(
+	// 			selectedConversationId,
+	// 			messageText,
+	// 			USER_ID,
+	// 			REFERENCE_MESSAGE_ID
+	// 		);
+	// 		const content = extractAssistantContent(result);
+
+	// 		if (content) {
+	// 			addAssistantMessage(content);
+	// 			scrollToBottom();
+	// 		}
+
+	// 		isLoading = false;
+	// 	} catch (error) {
+	// 		console.error('Error handling radio change:', error);
+	// 		alert('Error processing radio selection');
+	// 		isLoading = false;
+	// 	}
+	// };
+
+	// const handleDropdownChange = async (
+	// 	dropdown: any,
+	// 	selectedValue: string,
+	// 	messageId: number | string
+	// ) => {
+	// 	if (!selectedConversationId) {
+	// 		alert('Please start a conversation first');
+	// 		return;
+	// 	}
+
+	// 	try {
+	// 		const messageText = `Selected ${dropdown.label || dropdown.name}: ${selectedValue}`;
+	// 		addUserMessage(messageText);
+	// 		isLoading = true;
+	// 		scrollToBottom();
+
+	// 		const result = await sendChatMessage(
+	// 			selectedConversationId,
+	// 			messageText,
+	// 			USER_ID,
+	// 			REFERENCE_MESSAGE_ID
+	// 		);
+	// 		const content = extractAssistantContent(result);
+
+	// 		if (content) {
+	// 			addAssistantMessage(content);
+	// 			scrollToBottom();
+	// 		}
+
+	// 		isLoading = false;
+	// 	} catch (error) {
+	// 		console.error('Error handling dropdown change:', error);
+	// 		alert('Error processing dropdown selection');
+	// 		isLoading = false;
+	// 	}
+	// };
+
+	// const handleButtonAction = async (button: any, messageId: number | string) => {
+	// 	if (!selectedConversationId) {
+	// 		alert('Please start a conversation first');
+	// 		return;
+	// 	}
+
+	// 	try {
+	// 		let messageText = '';
+
+	// 		if (button.action === 'confirm' && button.operation === 'save') {
+	// 			const selectedItems = collectSelectedItems(messageId);
 				
-				if (button.payload) {
-					const payload = JSON.parse(button.payload);
-					const itemType = payload.itemType || 'services';
-					messageText = selectedItems
-						? `I want to save these ${itemType}:\n\n${selectedItems}`
-						: `I want to save ${payload.count || 0} ${itemType} to the database.`;
-				} else {
-					messageText = selectedItems
-						? `I want to save these items:\n\n${selectedItems}`
-						: 'I want to save the items to the database.';
-				}
-			} else if (button.action === 'modify') {
-				messageText = button.text || 'I want to modify the items.';
-			} else if (button.action !== 'cancel' && button.action !== 'cancell') {
-				messageText = button.text || `Action: ${button.action}`;
-			}
+	// 			if (button.payload) {
+	// 				const payload = JSON.parse(button.payload);
+	// 				const itemType = payload.itemType || 'services';
+	// 				messageText = selectedItems
+	// 					? `I want to save these ${itemType}:\n\n${selectedItems}`
+	// 					: `I want to save ${payload.count || 0} ${itemType} to the database.`;
+	// 			} else {
+	// 				messageText = selectedItems
+	// 					? `I want to save these items:\n\n${selectedItems}`
+	// 					: 'I want to save the items to the database.';
+	// 			}
+	// 		} else if (button.action === 'modify') {
+	// 			messageText = button.text || 'I want to modify the items.';
+	// 		} else if (button.action !== 'cancel' && button.action !== 'cancell') {
+	// 			messageText = button.text || `Action: ${button.action}`;
+	// 		}
 
-			if (messageText) {
-				addUserMessage(messageText);
-				isLoading = true;
-				scrollToBottom();
+	// 		if (messageText) {
+	// 			addUserMessage(messageText);
+	// 			isLoading = true;
+	// 			scrollToBottom();
 
-				const result = await sendChatMessage(selectedConversationId, messageText, USER_ID, REFERENCE_MESSAGE_ID);
-				const content = extractAssistantContent(result);
+	// 			const result = await sendChatMessage(selectedConversationId, messageText, USER_ID, REFERENCE_MESSAGE_ID);
+	// 			const content = extractAssistantContent(result);
 
-				if (content) {
-					addAssistantMessage(content);
-					scrollToBottom();
-				}
+	// 			if (content) {
+	// 				addAssistantMessage(content);
+	// 				scrollToBottom();
+	// 			}
 
-				isLoading = false;
-			}
-		} catch (error) {
-			console.error('Error handling button action:', error);
-			alert('Error processing button action');
-			isLoading = false;
-		}
-	};
+	// 			isLoading = false;
+	// 		}
+	// 	} catch (error) {
+	// 		console.error('Error handling button action:', error);
+	// 		alert('Error processing button action');
+	// 		isLoading = false;
+	// 	}
+	// };
 
-	const saveSelectedRowsToStorage = async () => {
-		if (!selectedConversationId) {
-			alert('Please start a conversation first');
-			return;
-		}
+	// const saveSelectedRowsToStorage = async () => {
+	// 	if (!selectedConversationId) {
+	// 		alert('Please start a conversation first');
+	// 		return;
+	// 	}
 
-		const selectedServices: any[] = [];
-		selectionState.forEach((messageSelections, messageId) => {
-			messageSelections.forEach((state, blockIndex) => {
-				if (state.type === 'table-rows' && state.selected.size > 0) {
-					const parsed = parsedMessageContent.get(messageId);
-					if (parsed && parsed[blockIndex]?.type === 'table') {
-						const table = parsed[blockIndex];
-						const selectedRows = Array.from(state.selected).map((rowIdx) => {
-							const row = table.content.rows[rowIdx];
-							const serviceData: any = {};
-							table.content.headers.forEach((header: string, idx: number) => {
-								serviceData[header] = row[idx];
-							});
-							return serviceData;
-						});
-						selectedServices.push(...selectedRows);
-					}
-				}
-			});
-		});
+	// 	const selectedServices: any[] = [];
+	// 	selectionState.forEach((messageSelections, messageId) => {
+	// 		messageSelections.forEach((state, blockIndex) => {
+	// 			if (state.type === 'table-rows' && state.selected.size > 0) {
+	// 				const parsed = parsedMessageContent.get(messageId);
+	// 				if (parsed && parsed[blockIndex]?.type === 'table') {
+	// 					const table = parsed[blockIndex];
+	// 					const selectedRows = Array.from(state.selected).map((rowIdx) => {
+	// 						const row = table.content.rows[rowIdx];
+	// 						const serviceData: any = {};
+	// 						table.content.headers.forEach((header: string, idx: number) => {
+	// 							serviceData[header] = row[idx];
+	// 						});
+	// 						return serviceData;
+	// 					});
+	// 					selectedServices.push(...selectedRows);
+	// 				}
+	// 			}
+	// 		});
+	// 	});
 
-		if (selectedServices.length === 0) {
-			alert('No services selected. Please select services first.');
-			return;
-		}
+	// 	if (selectedServices.length === 0) {
+	// 		alert('No services selected. Please select services first.');
+	// 		return;
+	// 	}
 
-		const serviceNames = selectedServices.map((service, idx) => {
-			const name = service['Service Name'] || service['Name'] || service['#'] || `Service ${idx + 1}`;
-			const description = service['Description'] || service['description'] || '';
-			return description ? `${name}: ${description}` : name;
-		});
+	// 	const serviceNames = selectedServices.map((service, idx) => {
+	// 		const name = service['Service Name'] || service['Name'] || service['#'] || `Service ${idx + 1}`;
+	// 		const description = service['Description'] || service['description'] || '';
+	// 		return description ? `${name}: ${description}` : name;
+	// 	});
 
-		const messageText = `I want to save these services to the database:\n\n${serviceNames.join('\n')}`;
+	// 	const messageText = `I want to save these services to the database:\n\n${serviceNames.join('\n')}`;
 
-		try {
-			await handleButtonAction({ action: 'confirm', operation: 'save', text: messageText }, -1);
+	// 	try {
+	// 		await handleButtonAction({ action: 'confirm', operation: 'save', text: messageText }, -1);
 			
-			selectionState.forEach((messageSelections) => {
-				messageSelections.forEach((state) => {
-					if (state.type === 'table-rows') state.selected.clear();
-				});
-			});
-			selectionState = new Map(selectionState);
-		} catch (error) {
-			console.error('Error saving services:', error);
-			alert('Error saving services to database. Please try again.');
-		}
-	};
+	// 		selectionState.forEach((messageSelections) => {
+	// 			messageSelections.forEach((state) => {
+	// 				if (state.type === 'table-rows') state.selected.clear();
+	// 			});
+	// 		});
+	// 		selectionState = new Map(selectionState);
+	// 	} catch (error) {
+	// 		console.error('Error saving services:', error);
+	// 		alert('Error saving services to database. Please try again.');
+	// 	}
+	// };
+	
 </script>
 
 <div class="flex h-screen overflow-hidden bg-gradient-to-br from-[#0a0a1a] via-[#1a1a2e] to-[#0f0f23] font-sans text-white antialiased">
@@ -554,7 +629,9 @@
 						onDeleteRow={handleDeleteTableRow}
 						onDeleteItem={handleDeleteListItem}
 						onSaveSelected={saveSelectedRowsToStorage}
-					/>
+						/>
+						<!-- onDropdownChange={handleDropdownChange}
+						onRadioChange={handleRadioChange} -->
 				{/each}
 
 				{#if isLoading}

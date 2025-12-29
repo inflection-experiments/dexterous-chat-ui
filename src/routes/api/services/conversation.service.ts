@@ -7,10 +7,10 @@ import { Helper } from '$lib/utils/helper';
 export const getConversationsByUserId = async (userId: string): Promise<Conversation[]> => {
 	try {
 		const url = `${BACKEND_API_URL}/dexterous/chat/conversations/search?userId=${userId}`;
-		var cacheKey = `req-${Helper.uuidToBase64(userId)}:getConversationsByUserId`;
-		if (await RequestResponseCacheService.has(cacheKey)) {
-			return await RequestResponseCacheService.get(cacheKey);
-		}
+		// var cacheKey = `req-${Helper.uuidToBase64(userId)}:getConversationsByUserId`;
+		// if (await RequestResponseCacheService.has(cacheKey)) {
+		// 	return await RequestResponseCacheService.get(cacheKey);
+		// }
 		
 		const response = await get_(url);
 		
@@ -30,7 +30,7 @@ export const getConversationsByUserId = async (userId: string): Promise<Conversa
 			result = response.conversations;
 		}
 		
-		await RequestResponseCacheService.set(cacheKey, result);
+		// await RequestResponseCacheService.set(cacheKey, result);
 		return result;
 	} catch (error) {
 		console.error('Error in getConversationsByUserId:', error);
@@ -44,10 +44,10 @@ export const getConversationMessages = async (
 ): Promise<any[]> => {
 	try {
 		const url = `${BACKEND_API_URL}/dexterous/chat/conversations/${conversationId}/messages?userId=${userId}`;
-		var cacheKey = `req-${Helper.uuidToBase64(userId)}:getConversationMessages-${Helper.uuidToBase64(conversationId)}`;
-		if (await RequestResponseCacheService.has(cacheKey)) {
-			return await RequestResponseCacheService.get(cacheKey);
-		}
+		// var cacheKey = `req-${Helper.uuidToBase64(userId)}:getConversationMessages-${Helper.uuidToBase64(conversationId)}`;
+		// if (await RequestResponseCacheService.has(cacheKey)) {
+		// 	return await RequestResponseCacheService.get(cacheKey);
+		// }
 		
 		const response = await get_(url);
 		
@@ -61,7 +61,7 @@ export const getConversationMessages = async (
 			result = response.messages;
 		}
 		
-		await RequestResponseCacheService.set(cacheKey, result);
+		// await RequestResponseCacheService.set(cacheKey, result);
 		return result;
 	} catch (error) {
 		console.error('Error in getConversationMessages:', error);
@@ -73,10 +73,10 @@ export const getConversationMessagesById = async (
 ): Promise<any[]> => {
 	try {
 		const url = `${BACKEND_API_URL}/dexterous/chat/conversations/${conversationId}/messages`;
-		var cacheKey = `req-${Helper.uuidToBase64(conversationId)}:getConversationMessagesById`;
-		if (await RequestResponseCacheService.has(cacheKey)) {
-			return await RequestResponseCacheService.get(cacheKey);
-		}
+		// var cacheKey = `req-${Helper.uuidToBase64(conversationId)}:getConversationMessagesById`;
+		// if (await RequestResponseCacheService.has(cacheKey)) {
+		// 	return await RequestResponseCacheService.get(cacheKey);
+		// }
 		
 		const response = await get_(url);
 		
@@ -92,9 +92,8 @@ export const getConversationMessagesById = async (
 			messages = response.messages;
 		}
 		
-		await RequestResponseCacheService.set(cacheKey, messages);
-		// Return messages as-is (they have UserContent and AssistantContent arrays)
-		// The frontend will handle the conversion
+		// await RequestResponseCacheService.set(cacheKey, messages);
+
 		return messages;
 	} catch (error) {
 		console.error('Error in getConversationMessagesById:', error);
@@ -111,10 +110,10 @@ export const createConversation = async (projectId: string, userId: string): Pro
 		const response = await post__(url, body, userId);
 		
 		// Clear related cache entries after creating conversation
-		const keysToBeDeleted = [
-			`req-${Helper.uuidToBase64(userId)}:getConversationsByUserId`
-		];
-		await RequestResponseCacheService.findAndClear(keysToBeDeleted);
+		// const keysToBeDeleted = [
+		// 	`req-${Helper.uuidToBase64(userId)}:getConversationsByUserId`
+		// ];
+		// await RequestResponseCacheService.findAndClear(keysToBeDeleted);
 		
 		return response;
 	} catch (error) {
@@ -129,11 +128,11 @@ export const deleteConversation = async (conversationId: string): Promise<any> =
 		const response = await delete_(url);
 		
 		// Clear related cache entries after deleting conversation
-		const keysToBeDeleted = [
-			`req-${Helper.uuidToBase64(conversationId)}:getConversationMessagesById`,
-			`req-${Helper.uuidToBase64(conversationId)}:getConversationMessages`
-		];
-		await RequestResponseCacheService.findAndClear(keysToBeDeleted);
+		// const keysToBeDeleted = [
+		// 	`req-${Helper.uuidToBase64(conversationId)}:getConversationMessagesById`,
+		// 	`req-${Helper.uuidToBase64(conversationId)}:getConversationMessages`
+		// ];
+		// await RequestResponseCacheService.findAndClear(keysToBeDeleted);
 		
 		return response;
 	} catch (error) {

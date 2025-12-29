@@ -116,11 +116,79 @@ function extractRadioGroups(text: string): { radioGroups: RadioGroup[]; cleanedT
 	const radioGroups: RadioGroup[] = [];
 	let cleanedText = text;
 	
-	// Match radio group containers (divs with radio-group class or similar)
+	// First, try to match form-based radio groups (common pattern from backend)
+	// Use matchAll to get all matches first, then process them
+	const formMatches = Array.from(text.matchAll(/<form[^>]*>([\s\S]*?)<\/form>/gi));
+	
+	for (const formMatch of formMatches) {
+		const formHtml = formMatch[1];
+		const fullMatch = formMatch[0];
+		
+		// Extract all radio inputs
+		const radioInputRegex = /<input[^>]*type="radio"[^>]*>/gi;
+		const allRadios = Array.from(formHtml.matchAll(radioInputRegex));
+		
+		if (allRadios.length > 0) {
+			// Get name from first radio input
+			const nameMatch = allRadios[0][0].match(/name="([^"]*)"/i);
+			const name = nameMatch ? nameMatch[1] : `radio-group-${radioGroups.length}`;
+			
+			const options: RadioOption[] = [];
+			
+			// Extract all radio inputs with their labels
+			for (const radioMatch of allRadios) {
+				const radioHtml = radioMatch[0];
+				const radioIndex = radioMatch.index || 0;
+				const valueMatch = radioHtml.match(/value="([^"]*)"/i);
+				const checkedMatch = radioHtml.match(/checked/i);
+				
+				// Find the label that wraps this radio button
+				// Pattern: <label>...<input type="radio">...text...</label>
+				const contextStart = Math.max(0, radioIndex - 500);
+				const contextEnd = Math.min(formHtml.length, radioIndex + radioHtml.length + 500);
+				const context = formHtml.substring(contextStart, contextEnd);
+				
+				// Try to find label wrapping the radio
+				const wrappedLabelMatch = context.match(/<label[^>]*>[\s\S]*?<input[^>]*type="radio"[^>]*>([\s\S]*?)<\/label>/i);
+				let labelText = '';
+				
+				if (wrappedLabelMatch) {
+					labelText = wrappedLabelMatch[1].replace(/<[^>]*>/g, '').trim();
+				} else {
+					// Try to find label after the radio
+					const afterRadio = formHtml.substring(radioIndex + radioHtml.length);
+					const labelAfterMatch = afterRadio.match(/<label[^>]*>([\s\S]*?)<\/label>/i);
+					if (labelAfterMatch) {
+						labelText = labelAfterMatch[1].replace(/<[^>]*>/g, '').trim();
+					}
+				}
+				
+				if (valueMatch) {
+					options.push({
+						value: valueMatch[1],
+						label: labelText || valueMatch[1],
+						checked: !!checkedMatch
+					});
+				}
+			}
+			
+			if (options.length > 0) {
+				radioGroups.push({
+					name,
+					label: undefined,
+					options,
+					action: undefined
+				});
+				cleanedText = cleanedText.replace(fullMatch, '');
+			}
+		}
+	}
+	
+	// Also match radio group containers (divs with radio-group class or similar)
 	const radioGroupRegex = /<div[^>]*(?:class="[^"]*radio[^"]*"|data-type="radio-group")[^>]*>([\s\S]*?)<\/div>/gi;
 	let groupMatch;
 	
-	while ((groupMatch = radioGroupRegex.exec(text)) !== null) {
+	while ((groupMatch = radioGroupRegex.exec(cleanedText)) !== null) {
 		const groupHtml = groupMatch[1];
 		const fullMatch = groupMatch[0];
 		
@@ -159,7 +227,7 @@ function extractRadioGroups(text: string): { radioGroups: RadioGroup[]; cleanedT
 			
 			// If no label found, try to find next text node or label
 			if (!labelText) {
-				const afterRadio = groupHtml.substring(radioMatch.index + radioMatch[0].length);
+				const afterRadio = radioMatch.index !== undefined ? groupHtml.substring(radioMatch.index + radioMatch[0].length) : '';
 				const nextLabelMatch = afterRadio.match(/<label[^>]*>([\s\S]*?)<\/label>/i);
 				if (nextLabelMatch) {
 					labelText = nextLabelMatch[1].replace(/<[^>]*>/g, '').trim();
@@ -330,7 +398,7 @@ export function parseMarkdown(md: string): ParsedBlock[] {
 		}
 	}
 	
-	// Post-process: check for buttons, radio groups, and dropdowns in paragraph blocks that might span multiple lines
+	// Post-process: check for buttons in paragraph blocks that might span multiple lines
 	// This handles cases where interactive elements are embedded in the markdown text
 	const finalResult: ParsedBlock[] = [];
 	let accumulatedText = '';
@@ -349,14 +417,6 @@ export function parseMarkdown(md: string): ParsedBlock[] {
 				const { buttons, cleanedText: textAfterButtons } = extractButtons(processedText);
 				processedText = textAfterButtons;
 				
-				// Extract radio groups
-				const { radioGroups, cleanedText: textAfterRadios } = extractRadioGroups(processedText);
-				processedText = textAfterRadios;
-				
-				// Extract dropdowns
-				const { dropdowns, cleanedText: textAfterDropdowns } = extractDropdowns(processedText);
-				processedText = textAfterDropdowns;
-				
 				// Add text content if any remains
 				if (processedText.trim()) {
 					finalResult.push({ type: 'p', content: processedText });
@@ -365,12 +425,6 @@ export function parseMarkdown(md: string): ParsedBlock[] {
 				// Add interactive elements
 				if (buttons.length > 0) {
 					finalResult.push({ type: 'buttons', content: buttons });
-				}
-				if (radioGroups.length > 0) {
-					finalResult.push({ type: 'radio-group', content: radioGroups });
-				}
-				if (dropdowns.length > 0) {
-					finalResult.push({ type: 'dropdown', content: dropdowns });
 				}
 				
 				accumulatedText = '';
@@ -387,14 +441,6 @@ export function parseMarkdown(md: string): ParsedBlock[] {
 		const { buttons, cleanedText: textAfterButtons } = extractButtons(processedText);
 		processedText = textAfterButtons;
 		
-		// Extract radio groups
-		const { radioGroups, cleanedText: textAfterRadios } = extractRadioGroups(processedText);
-		processedText = textAfterRadios;
-		
-		// Extract dropdowns
-		const { dropdowns, cleanedText: textAfterDropdowns } = extractDropdowns(processedText);
-		processedText = textAfterDropdowns;
-		
 		// Add text content if any remains
 		if (processedText.trim()) {
 			finalResult.push({ type: 'p', content: processedText });
@@ -404,12 +450,6 @@ export function parseMarkdown(md: string): ParsedBlock[] {
 		if (buttons.length > 0) {
 			finalResult.push({ type: 'buttons', content: buttons });
 		}
-		if (radioGroups.length > 0) {
-			finalResult.push({ type: 'radio-group', content: radioGroups });
-		}
-		if (dropdowns.length > 0) {
-			finalResult.push({ type: 'dropdown', content: dropdowns });
-		}
 	}
 
 	return finalResult;
@@ -417,16 +457,44 @@ export function parseMarkdown(md: string): ParsedBlock[] {
 
 export function parseTable(lines: string[]): TableData {
 	if (lines.length < 2) return { headers: [], rows: [] };
-	const headers = lines[0]
-		.split('|')
-		.map((h) => h.trim())
-		.filter((h) => h !== '');
-	const rows = lines.slice(2).map((row) =>
-		row
-			.split('|')
-			.map((cell) => cell.trim())
-			.filter((cell) => cell !== '')
-	);
+	
+	// Parse headers - remove first and last empty elements from split
+	const headerParts = lines[0].split('|');
+	const headers = headerParts
+		.slice(1, -1) // Remove first and last empty strings from split
+		.map((h) => h.trim());
+	
+	const expectedColumnCount = headers.length;
+	
+	// Skip the separator line (index 1) and parse data rows
+	const rows = lines.slice(2).map((row) => {
+		// Split by pipe, handling edge cases
+		const rowParts = row.split('|');
+		
+		// Remove first and last empty elements, preserve empty cells in between
+		// This preserves the exact content including the "#" column numbers
+		let cells = rowParts
+			.slice(1, -1) // Remove first and last empty strings
+			.map((cell) => cell.trim()); // Keep empty strings to maintain column alignment
+		
+		// Ensure all rows have the same number of columns as headers
+		// This is critical for proper column alignment
+		if (cells.length < expectedColumnCount) {
+			// Pad missing columns at the end only (never modify existing cells)
+			// This ensures "#" column (index 0) and Service Name (index 1) stay in correct positions
+			const padding = Array(expectedColumnCount - cells.length).fill('');
+			cells = [...cells, ...padding];
+		} else if (cells.length > expectedColumnCount) {
+			// Truncate from the end only (never from the beginning)
+			// This preserves "#" column and Service Name columns
+			cells = cells.slice(0, expectedColumnCount);
+		}
+		
+		// Ensure we have exactly the expected number of columns
+		// This guarantees proper alignment: #, Service Name, Endpoint, Method, Description
+		return cells;
+	});
+	
 	return { headers, rows };
 }
 

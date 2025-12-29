@@ -1,8 +1,55 @@
 import type { Message } from '$lib/types/chat';
 import type { Conversation } from '$lib/types/botTypes';
+import { transformBackendResponseToStructured } from './responseTransformer';
 
 // API Response Handlers
+const getContentArray = (result: any): any[] => {
+	if (Array.isArray(result?.Data?.Contents)) return result.Data.Contents;
+	if (Array.isArray(result?.Contents)) return result.Contents;
+	if (Array.isArray(result?.AssistantContent)) return result.AssistantContent;
+	if (Array.isArray(result?.Data?.AssistantContent)) return result.Data.AssistantContent;
+	return [];
+};
+
+const collectTextFromContents = (contents: any[]): string => {
+	const textParts: string[] = [];
+
+	for (const content of contents) {
+		let contentText: string | null = null;
+
+		if (content?.data?.text) {
+			contentText = content.data.text;
+		} else if (content?.data?.message) {
+			contentText = content.data.message;
+		} else if (content?.text) {
+			contentText = content.text;
+		} else if (content?.content) {
+			contentText = content.content;
+		} else if (typeof content === 'string') {
+			contentText = content;
+		} else if (content?.data && typeof content.data === 'string') {
+			contentText = content.data;
+		}
+
+		if (contentText && typeof contentText === 'string' && contentText.trim().length > 0) {
+			textParts.push(contentText.trim());
+		}
+	}
+
+	return textParts.join('\n\n');
+};
+
 export const extractAssistantContent = (result: any): string => {
+	const payload = result?.Data || result?.data || result;
+	const contentArray = getContentArray(payload);
+
+	if (contentArray.length > 0) {
+		const text = collectTextFromContents(contentArray);
+		if (text) {
+			return stripMarkdownCodeBlock(text);
+		}
+	}
+
 	const contentSources = [
 		() => result.Data?.[result.Data.length - 1]?.AssistantContent,
 		() => result.Data?.AssistantContent,
@@ -20,13 +67,94 @@ export const extractAssistantContent = (result: any): string => {
 				.filter((c: any) => c.type === 'text' && c.data?.text)
 				.map((c: any) => c.data.text)
 				.join('\n');
-			if (text) return text;
+			if (text) {
+				return stripMarkdownCodeBlock(text);
+			}
 		}
-		if (typeof content === 'string' && content) return content;
+		if (typeof content === 'string' && content) {
+			return stripMarkdownCodeBlock(content);
+		}
 	}
 
 	return '';
 };
+
+/**
+ * Convert a backend response (or message) into an Assistant UI message with structured content
+ */
+export const buildAssistantMessageFromResult = (
+	result: any,
+	customId?: number | string
+): Message | null => {
+	const payload = result?.Data || result?.data || result;
+	const contents = getContentArray(payload);
+	const text = collectTextFromContents(contents);
+
+	const structured = transformBackendResponseToStructured(payload);
+	const hasStructured = structured.blocks && structured.blocks.length > 0;
+
+	const fallbackText =
+		text ||
+		payload?.Content ||
+		payload?.content ||
+		payload?.Message ||
+		result?.Message ||
+		result?.message ||
+		'';
+
+	if (!fallbackText && !hasStructured) {
+		return null;
+	}
+
+	return {
+		id: customId ?? Date.now(),
+		Content: stripMarkdownCodeBlock(fallbackText || ''),
+		Role: 'Assistant',
+		StructuredResponse: hasStructured ? structured : undefined
+	};
+};
+
+/**
+ * Strip markdown code block wrappers (```markdown ... ``` or ``` ... ```)
+ * Handles various formats including with/without newlines and whitespace
+ */
+export function stripMarkdownCodeBlock(text: string): string {
+	if (!text) return text;
+	
+	let cleaned = text.trim();
+	
+	// Remove markdown code block wrapper - handle multiple patterns
+	// Pattern 1: ```markdown\n...\n``` (with newlines)
+	const pattern1 = /^```\s*markdown\s*\n([\s\S]*?)\n\s*```\s*$/;
+	// Pattern 2: ```markdown ... ``` (without newlines)
+	const pattern2 = /^```\s*markdown\s*([\s\S]*?)\s*```\s*$/;
+	// Pattern 3: ```\n...\n``` (generic code block with newlines)
+	const pattern3 = /^```\s*\n([\s\S]*?)\n\s*```\s*$/;
+	// Pattern 4: ``` ... ``` (generic code block without newlines)
+	const pattern4 = /^```\s*([\s\S]*?)\s*```\s*$/;
+	
+	let match = cleaned.match(pattern1);
+	if (match && match[1]) {
+		return match[1].trim();
+	}
+	
+	match = cleaned.match(pattern2);
+	if (match && match[1]) {
+		return match[1].trim();
+	}
+	
+	match = cleaned.match(pattern3);
+	if (match && match[1]) {
+		return match[1].trim();
+	}
+	
+	match = cleaned.match(pattern4);
+	if (match && match[1]) {
+		return match[1].trim();
+	}
+	
+	return cleaned;
+}
 
 export const extractFirstUserMessage = (message: any): string => {
 	if (!message) return '';
@@ -45,25 +173,35 @@ export const extractFirstUserMessage = (message: any): string => {
 export const convertBackendMessageToUIMessage = (backendMsg: any): Message[] => {
 	const messages: Message[] = [];
 
-	const addMessage = (contentArray: any[], role: 'User' | 'Assistant', suffix: string) => {
-		if (!Array.isArray(contentArray)) return;
-
-		const text = contentArray
-			.filter((c: any) => c.type === 'text' && c.data?.text)
-			.map((c: any) => c.data.text)
-			.join('\n');
-
-		if (text.trim()) {
+	// User message (if available)
+	if (Array.isArray(backendMsg.UserContent)) {
+		const userText = collectTextFromContents(backendMsg.UserContent);
+		if (userText.trim()) {
 			messages.push({
-				id: `${backendMsg.id}-${suffix}`,
-				Content: text,
-				Role: role
+				id: `${backendMsg.id || Date.now()}-user`,
+				Content: stripMarkdownCodeBlock(userText),
+				Role: 'User'
 			});
 		}
-	};
+	}
 
-	addMessage(backendMsg.UserContent, 'User', 'user');
-	addMessage(backendMsg.AssistantContent, 'Assistant', 'assistant');
+	// Assistant message (supports AssistantContent or Contents)
+	const assistantContents =
+		backendMsg.AssistantContent ||
+		backendMsg.Contents ||
+		backendMsg.Data?.Contents ||
+		backendMsg.Data?.AssistantContent;
+
+	const assistantMessage = assistantContents
+		? buildAssistantMessageFromResult(
+				backendMsg,
+				`${backendMsg.id || Date.now()}-assistant`
+			)
+		: null;
+
+	if (assistantMessage) {
+		messages.push(assistantMessage);
+	}
 
 	return messages;
 };
@@ -166,22 +304,24 @@ export const formatDate = (dateString?: string): string => {
 export const createSelectionState = () => {
 	const state = new Map<number | string, Map<number, { type: string; selected: Set<number> }>>();
 
+	const get = (messageId: number | string, blockIndex: number, itemType: string): { type: string; selected: Set<number> } => {
+		if (!state.has(messageId)) {
+			state.set(messageId, new Map());
+		}
+		const messageSelections = state.get(messageId)!;
+		if (!messageSelections.has(blockIndex)) {
+			messageSelections.set(blockIndex, { type: itemType, selected: new Set<number>() });
+		}
+		const blockState = messageSelections.get(blockIndex)!;
+		if (blockState.type !== itemType) {
+			blockState.type = itemType;
+			blockState.selected.clear();
+		}
+		return blockState;
+	};
+
 	return {
-		get: (messageId: number | string, blockIndex: number, itemType: string) => {
-			if (!state.has(messageId)) {
-				state.set(messageId, new Map());
-			}
-			const messageSelections = state.get(messageId)!;
-			if (!messageSelections.has(blockIndex)) {
-				messageSelections.set(blockIndex, { type: itemType, selected: new Set<number>() });
-			}
-			const blockState = messageSelections.get(blockIndex)!;
-			if (blockState.type !== itemType) {
-				blockState.type = itemType;
-				blockState.selected.clear();
-			}
-			return blockState;
-		},
+		get,
 
 		toggle: (
 			messageId: number | string,
@@ -189,7 +329,7 @@ export const createSelectionState = () => {
 			itemIndex: number,
 			itemType: string
 		) => {
-			const blockState = this.get(messageId, blockIndex, itemType);
+			const blockState = get(messageId, blockIndex, itemType);
 			if (blockState.selected.has(itemIndex)) {
 				blockState.selected.delete(itemIndex);
 			} else {
@@ -216,7 +356,7 @@ export const createSelectionState = () => {
 			totalItems: number,
 			itemType: string
 		) => {
-			const blockState = this.get(messageId, blockIndex, itemType);
+			const blockState = get(messageId, blockIndex, itemType);
 			const allSelected = blockState.selected.size === totalItems && totalItems > 0;
 			if (allSelected) {
 				blockState.selected.clear();
