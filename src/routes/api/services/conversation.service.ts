@@ -7,10 +7,10 @@ import { Helper } from '$lib/utils/helper';
 export const getConversationsByUserId = async (userId: string): Promise<Conversation[]> => {
 	try {
 		const url = `${BACKEND_API_URL}/dexterous/chat/conversations/search?userId=${userId}`;
-		var cacheKey = `req-${Helper.uuidToBase64(userId)}:getConversationsByUserId`;
-		if (await RequestResponseCacheService.has(cacheKey)) {
-			return await RequestResponseCacheService.get(cacheKey);
-		}
+		// var cacheKey = `req-${Helper.uuidToBase64(userId)}:getConversationsByUserId`;
+		// if (await RequestResponseCacheService.has(cacheKey)) {
+		// 	return await RequestResponseCacheService.get(cacheKey);
+		// }
 		
 		const response = await get_(url);
 		
@@ -30,7 +30,7 @@ export const getConversationsByUserId = async (userId: string): Promise<Conversa
 			result = response.conversations;
 		}
 		
-		await RequestResponseCacheService.set(cacheKey, result);
+		// await RequestResponseCacheService.set(cacheKey, result);
 		return result;
 	} catch (error) {
 		console.error('Error in getConversationsByUserId:', error);
@@ -44,10 +44,10 @@ export const getConversationMessages = async (
 ): Promise<any[]> => {
 	try {
 		const url = `${BACKEND_API_URL}/dexterous/chat/conversations/${conversationId}/messages?userId=${userId}`;
-		var cacheKey = `req-${Helper.uuidToBase64(userId)}:getConversationMessages-${Helper.uuidToBase64(conversationId)}`;
-		if (await RequestResponseCacheService.has(cacheKey)) {
-			return await RequestResponseCacheService.get(cacheKey);
-		}
+		// var cacheKey = `req-${Helper.uuidToBase64(userId)}:getConversationMessages-${Helper.uuidToBase64(conversationId)}`;
+		// if (await RequestResponseCacheService.has(cacheKey)) {
+		// 	return await RequestResponseCacheService.get(cacheKey);
+		// }
 		
 		const response = await get_(url);
 		
@@ -61,7 +61,7 @@ export const getConversationMessages = async (
 			result = response.messages;
 		}
 		
-		await RequestResponseCacheService.set(cacheKey, result);
+		// await RequestResponseCacheService.set(cacheKey, result);
 		return result;
 	} catch (error) {
 		console.error('Error in getConversationMessages:', error);
@@ -73,10 +73,10 @@ export const getConversationMessagesById = async (
 ): Promise<any[]> => {
 	try {
 		const url = `${BACKEND_API_URL}/dexterous/chat/conversations/${conversationId}/messages`;
-		var cacheKey = `req-${Helper.uuidToBase64(conversationId)}:getConversationMessagesById`;
-		if (await RequestResponseCacheService.has(cacheKey)) {
-			return await RequestResponseCacheService.get(cacheKey);
-		}
+		// var cacheKey = `req-${Helper.uuidToBase64(conversationId)}:getConversationMessagesById`;
+		// if (await RequestResponseCacheService.has(cacheKey)) {
+		// 	return await RequestResponseCacheService.get(cacheKey);
+		// }
 		
 		const response = await get_(url);
 		
@@ -92,7 +92,7 @@ export const getConversationMessagesById = async (
 			messages = response.messages;
 		}
 		
-		await RequestResponseCacheService.set(cacheKey, messages);
+		// await RequestResponseCacheService.set(cacheKey, messages);
 		// Return messages as-is (they have UserContent and AssistantContent arrays)
 		// The frontend will handle the conversion
 		return messages;

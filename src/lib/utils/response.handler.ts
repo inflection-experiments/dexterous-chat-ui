@@ -1,5 +1,6 @@
 import type { Message } from '$lib/types/chat';
 import { json } from '@sveltejs/kit';
+import { transformBackendResponseToStructured } from './responseTransformer';
 
 export class ResponseHandler {
     static success(response: any): Response {
@@ -98,12 +99,33 @@ export class ResponseHandler {
     /**
      * Processes the backend response and converts it to a Message object
      * Used by service layer to transform backend responses
+     * Now supports structured responses with BotResponse format
      */
     static processBackendResponseToMessage(backendResponse: any): Message | null {
         if (!backendResponse) {
             return null;
         }
 
+        // Check if this is a new structured response format (has BotResponse)
+        const botResponseArray = this.findBotResponseArray(backendResponse);
+        const hasStructuredResponse = botResponseArray && botResponseArray.length > 0;
+
+        if (hasStructuredResponse) {
+            // Transform to structured format
+            const structuredResponse = transformBackendResponseToStructured(backendResponse);
+
+            // Extract plain text content for the Content field (for fallback display)
+            const contentText = this.extractTextFromBotResponse(botResponseArray);
+
+            return {
+                id: Date.now(),
+                Content: contentText || 'Response received',
+                Role: 'Assistant',
+                StructuredResponse: structuredResponse
+            };
+        }
+
+        // Fall back to old parsing logic
         const contentText = this.parseBackendResponse(backendResponse);
 
         if (contentText) {
@@ -115,6 +137,63 @@ export class ResponseHandler {
         }
 
         return null;
+    }
+
+    /**
+     * Find BotResponse array in various possible locations
+     */
+    private static findBotResponseArray(backendResponse: any): any[] | null {
+        // Direct path: Data.BotResponse
+        if (backendResponse?.Data?.BotResponse && Array.isArray(backendResponse.Data.BotResponse)) {
+            return backendResponse.Data.BotResponse;
+        }
+
+        // Nested in AssistantContent array
+        if (Array.isArray(backendResponse?.AssistantContent)) {
+            for (const item of backendResponse.AssistantContent) {
+                if (item?.Data?.BotResponse && Array.isArray(item.Data.BotResponse)) {
+                    return item.Data.BotResponse;
+                }
+            }
+        }
+
+        // Nested in UserContent array
+        if (Array.isArray(backendResponse?.UserContent)) {
+            for (const item of backendResponse.UserContent) {
+                if (item?.Data?.BotResponse && Array.isArray(item.Data.BotResponse)) {
+                    return item.Data.BotResponse;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Extract plain text from BotResponse array for fallback display
+     */
+    private static extractTextFromBotResponse(botResponses: any[]): string {
+        const textParts: string[] = [];
+
+        for (const item of botResponses) {
+            const content = item?.Content;
+            if (!content) continue;
+
+            // If content is a string, use it directly
+            if (typeof content === 'string') {
+                textParts.push(content);
+            }
+            // If content is an object with text-like properties
+            else if (typeof content === 'object') {
+                if ('text' in content) {
+                    textParts.push(String(content.text));
+                } else if ('Label' in content) {
+                    textParts.push(String(content.Label));
+                }
+            }
+        }
+
+        return textParts.join('\n\n');
     }
 
     /**

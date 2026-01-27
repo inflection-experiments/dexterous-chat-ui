@@ -1,8 +1,93 @@
 import type { Message } from '$lib/types/chat';
 import type { Conversation } from '$lib/types/botTypes';
+import type { Content, ChatMessageResponseDto } from '$lib/types/backendTypes';
+import { transformBackendResponseToStructured } from './responseTransformer';
+
+/**
+ * Helper to extract text from BotResponse array (only text content, not structured data)
+ */
+function extractTextFromBotResponseArray(botResponses: any[]): string {
+	const textParts: string[] = [];
+	for (const botResponse of botResponses) {
+		// Only extract TEXT content, not JSON objects (tables, buttons, etc.)
+		if (botResponse.Content && typeof botResponse.Content === 'string') {
+			// Skip if DataType is JSON or Format is Object/ObjectArray (these are structured data)
+			const dataType = (botResponse.DataType || '').toLowerCase();
+			const format = (botResponse.Format || '').toLowerCase();
+			const renderType = (botResponse.RenderType || '').toLowerCase();
+
+			// Only include text/markdown content, not structured data
+			if (dataType !== 'json' &&
+				format !== 'object' &&
+				format !== 'objectarray' &&
+				renderType !== 'table' &&
+				renderType !== 'button' &&
+				renderType !== 'dropdown' &&
+				renderType !== 'radiobutton') {
+				textParts.push(botResponse.Content);
+			}
+		}
+	}
+	return textParts.join('\n\n');
+}
 
 // API Response Handlers
 export const extractAssistantContent = (result: any): string => {
+	// Check for BotResponse at Data.BotResponse
+	if (result.Data?.BotResponse && Array.isArray(result.Data.BotResponse)) {
+		const text = extractTextFromBotResponseArray(result.Data.BotResponse);
+		if (text) {
+			return stripMarkdownCodeBlock(text);
+		}
+	}
+
+	// Check for BotResponse at root level
+	if (result.BotResponse && Array.isArray(result.BotResponse)) {
+		const text = extractTextFromBotResponseArray(result.BotResponse);
+		if (text) {
+			return stripMarkdownCodeBlock(text);
+		}
+	}
+
+	// Check for BotResponse nested in AssistantContent
+	if (result.AssistantContent && Array.isArray(result.AssistantContent)) {
+		for (const item of result.AssistantContent) {
+			if (item?.Data?.BotResponse && Array.isArray(item.Data.BotResponse)) {
+				const text = extractTextFromBotResponseArray(item.Data.BotResponse);
+				if (text) {
+					return stripMarkdownCodeBlock(text);
+				}
+			}
+			if (item?.BotResponse && Array.isArray(item.BotResponse)) {
+				const text = extractTextFromBotResponseArray(item.BotResponse);
+				if (text) {
+					return stripMarkdownCodeBlock(text);
+				}
+			}
+		}
+		// Check if AssistantContent items themselves are BotResponse format
+		const firstItem = result.AssistantContent[0];
+		if (firstItem && 'Content' in firstItem && 'DataType' in firstItem && 'RenderType' in firstItem) {
+			const text = extractTextFromBotResponseArray(result.AssistantContent);
+			if (text) {
+				return stripMarkdownCodeBlock(text);
+			}
+		}
+	}
+
+	// Handle Data.Contents array format (old format from backend)
+	if (result.Data?.Contents && Array.isArray(result.Data.Contents)) {
+		const textParts: string[] = [];
+		for (const content of result.Data.Contents) {
+			if (content.type === 'text' && content.data?.text) {
+				textParts.push(content.data.text);
+			}
+		}
+		if (textParts.length > 0) {
+			return stripMarkdownCodeBlock(textParts.join('\n\n'));
+		}
+	}
+
 	const contentSources = [
 		() => result.Data?.[result.Data.length - 1]?.AssistantContent,
 		() => result.Data?.AssistantContent,
@@ -20,21 +105,196 @@ export const extractAssistantContent = (result: any): string => {
 				.filter((c: any) => c.type === 'text' && c.data?.text)
 				.map((c: any) => c.data.text)
 				.join('\n');
-			if (text) return text;
+			if (text) {
+				return stripMarkdownCodeBlock(text);
+			}
 		}
-		if (typeof content === 'string' && content) return content;
+		if (typeof content === 'string' && content) {
+			return stripMarkdownCodeBlock(content);
+		}
 	}
 
 	return '';
 };
 
+/**
+ * Convert a backend response (or message) into an Assistant UI message with structured content
+ */
+export const buildAssistantMessageFromResult = (
+	result: any,
+	customId?: number | string
+): Message | null => {
+	const payload = result?.Data || result?.data || result;
+
+	// Transform to structured response
+	const structured = transformBackendResponseToStructured(result);
+	const hasStructured = structured.blocks && structured.blocks.length > 0;
+
+	// Debug logging
+	console.log('buildAssistantMessageFromResult - input:', JSON.stringify(result, null, 2).slice(0, 500));
+	console.log('buildAssistantMessageFromResult - structured blocks:', structured.blocks.length, hasStructured);
+
+	// Extract text content for fallback
+	const text = extractAssistantContent(result);
+	const fallbackText =
+		text ||
+		payload?.Content ||
+		payload?.content ||
+		payload?.Message ||
+		result?.Message ||
+		result?.message ||
+		'';
+
+	// If we have structured blocks, use them even if no text
+	if (hasStructured) {
+		return {
+			id: customId ?? Date.now(),
+			Content: stripMarkdownCodeBlock(fallbackText || ''),
+			Role: 'Assistant',
+			StructuredResponse: structured
+		};
+	}
+
+	// If we have text but no structured blocks, return message with text
+	if (fallbackText) {
+		return {
+			id: customId ?? Date.now(),
+			Content: stripMarkdownCodeBlock(fallbackText),
+			Role: 'Assistant'
+		};
+	}
+
+	// No content at all
+	return null;
+};
+
+/**
+ * Strip markdown code block wrappers (```markdown ... ``` or ``` ... ```)
+ * Handles various formats including with/without newlines and whitespace
+ */
+export function stripMarkdownCodeBlock(text: string): string {
+	if (!text) return text;
+	
+	let cleaned = text.trim();
+	
+	// Remove markdown code block wrapper - handle multiple patterns
+	// Pattern 1: ```markdown\n...\n``` (with newlines)
+	const pattern1 = /^```\s*markdown\s*\n([\s\S]*?)\n\s*```\s*$/;
+	// Pattern 2: ```markdown ... ``` (without newlines)
+	const pattern2 = /^```\s*markdown\s*([\s\S]*?)\s*```\s*$/;
+	// Pattern 3: ```\n...\n``` (generic code block with newlines)
+	const pattern3 = /^```\s*\n([\s\S]*?)\n\s*```\s*$/;
+	// Pattern 4: ``` ... ``` (generic code block without newlines)
+	const pattern4 = /^```\s*([\s\S]*?)\s*```\s*$/;
+	
+	let match = cleaned.match(pattern1);
+	if (match && match[1]) {
+		return match[1].trim();
+	}
+	
+	match = cleaned.match(pattern2);
+	if (match && match[1]) {
+		return match[1].trim();
+	}
+	
+	match = cleaned.match(pattern3);
+	if (match && match[1]) {
+		return match[1].trim();
+	}
+	
+	match = cleaned.match(pattern4);
+	if (match && match[1]) {
+		return match[1].trim();
+	}
+	
+	return cleaned;
+}
+
+/**
+ * Helper to check if a BotResponse item is text content (not a UI element like button/table)
+ */
+function isTextContent(botResponse: any): boolean {
+	if (!botResponse || typeof botResponse.Content !== 'string') {
+		return false;
+	}
+	const dataType = (botResponse.DataType || '').toLowerCase();
+	const format = (botResponse.Format || '').toLowerCase();
+	const renderType = (botResponse.RenderType || '').toLowerCase();
+
+	// Exclude structured/interactive content
+	if (dataType === 'json' ||
+		format === 'object' ||
+		format === 'objectarray' ||
+		renderType === 'table' ||
+		renderType === 'button' ||
+		renderType === 'dropdown' ||
+		renderType === 'radiobutton') {
+		return false;
+	}
+	return true;
+}
+
+/**
+ * Extract text from Content array or single Content
+ * Handles both old format {type: 'text', data: {text: '...'}}
+ * and new BotResponse format {Data: {BotResponse: [{Content: '...'}]}}
+ * Only extracts TEXT content, not JSON/structured data
+ */
+function extractTextFromContents(contents: Content[] | Content | any[] | any | undefined): string {
+	if (!contents) return '';
+
+	const contentArray = Array.isArray(contents) ? contents : [contents];
+	const textParts: string[] = [];
+
+	for (const content of contentArray) {
+		// Old format: {type: 'text', data: {text: '...'}}
+		if (content.type === 'text' && content.data?.text) {
+			textParts.push(content.data.text);
+		}
+		// New BotResponse format nested in Data: {Data: {BotResponse: [{Content: '...'}]}}
+		else if (content.Data?.BotResponse && Array.isArray(content.Data.BotResponse)) {
+			for (const botResponse of content.Data.BotResponse) {
+				if (isTextContent(botResponse)) {
+					textParts.push(botResponse.Content);
+				}
+			}
+		}
+		// Direct BotResponse array format
+		else if (content.BotResponse && Array.isArray(content.BotResponse)) {
+			for (const botResponse of content.BotResponse) {
+				if (isTextContent(botResponse)) {
+					textParts.push(botResponse.Content);
+				}
+			}
+		}
+		// Direct Content field (string) - only if it's text type
+		else if (content.Content && typeof content.Content === 'string' && isTextContent(content)) {
+			textParts.push(content.Content);
+		}
+	}
+
+	return textParts.join('\n');
+}
+
 export const extractFirstUserMessage = (message: any): string => {
 	if (!message) return '';
 
-	if (Array.isArray(message.UserContent) && message.UserContent.length > 0) {
-		const firstContent = message.UserContent[0];
-		if (firstContent.type === 'text' && firstContent.data?.text) {
-			return firstContent.data.text;
+	const userContent = message.UserContent;
+	if (userContent) {
+		const contentArray = Array.isArray(userContent) ? userContent : [userContent];
+		if (contentArray.length > 0) {
+			const firstContent = contentArray[0];
+			// Old format: {type: 'text', data: {text: '...'}}
+			if (firstContent.type === 'text' && firstContent.data?.text) {
+				return firstContent.data.text;
+			}
+			// New BotResponse format: {Data: {BotResponse: [{Content: '...'}]}}
+			if (firstContent.Data?.BotResponse && Array.isArray(firstContent.Data.BotResponse)) {
+				const firstBotResponse = firstContent.Data.BotResponse[0];
+				if (firstBotResponse?.Content && typeof firstBotResponse.Content === 'string') {
+					return firstBotResponse.Content;
+				}
+			}
 		}
 	}
 
@@ -42,28 +302,32 @@ export const extractFirstUserMessage = (message: any): string => {
 };
 
 // Message Conversion
-export const convertBackendMessageToUIMessage = (backendMsg: any): Message[] => {
+export const convertBackendMessageToUIMessage = (backendMsg: ChatMessageResponseDto | any): Message[] => {
 	const messages: Message[] = [];
 
-	const addMessage = (contentArray: any[], role: 'User' | 'Assistant', suffix: string) => {
-		if (!Array.isArray(contentArray)) return;
-
-		const text = contentArray
-			.filter((c: any) => c.type === 'text' && c.data?.text)
-			.map((c: any) => c.data.text)
-			.join('\n');
-
-		if (text.trim()) {
+	// User message (if available)
+	const userContent = backendMsg.UserContent;
+	if (userContent) {
+		const userText = extractTextFromContents(userContent);
+		if (userText.trim()) {
 			messages.push({
-				id: `${backendMsg.id}-${suffix}`,
-				Content: text,
-				Role: role
+				id: `${backendMsg.id || Date.now()}-user`,
+				Content: stripMarkdownCodeBlock(userText),
+				Role: 'User'
 			});
 		}
-	};
+	}
 
-	addMessage(backendMsg.UserContent, 'User', 'user');
-	addMessage(backendMsg.AssistantContent, 'Assistant', 'assistant');
+	// Assistant message - try to build with structured response
+	// buildAssistantMessageFromResult and transformBackendResponseToStructured handle all formats
+	const assistantMessage = buildAssistantMessageFromResult(
+		backendMsg,
+		`${backendMsg.id || Date.now()}-assistant`
+	);
+
+	if (assistantMessage) {
+		messages.push(assistantMessage);
+	}
 
 	return messages;
 };
@@ -166,22 +430,24 @@ export const formatDate = (dateString?: string): string => {
 export const createSelectionState = () => {
 	const state = new Map<number | string, Map<number, { type: string; selected: Set<number> }>>();
 
+	const get = (messageId: number | string, blockIndex: number, itemType: string): { type: string; selected: Set<number> } => {
+		if (!state.has(messageId)) {
+			state.set(messageId, new Map());
+		}
+		const messageSelections = state.get(messageId)!;
+		if (!messageSelections.has(blockIndex)) {
+			messageSelections.set(blockIndex, { type: itemType, selected: new Set<number>() });
+		}
+		const blockState = messageSelections.get(blockIndex)!;
+		if (blockState.type !== itemType) {
+			blockState.type = itemType;
+			blockState.selected.clear();
+		}
+		return blockState;
+	};
+
 	return {
-		get: (messageId: number | string, blockIndex: number, itemType: string) => {
-			if (!state.has(messageId)) {
-				state.set(messageId, new Map());
-			}
-			const messageSelections = state.get(messageId)!;
-			if (!messageSelections.has(blockIndex)) {
-				messageSelections.set(blockIndex, { type: itemType, selected: new Set<number>() });
-			}
-			const blockState = messageSelections.get(blockIndex)!;
-			if (blockState.type !== itemType) {
-				blockState.type = itemType;
-				blockState.selected.clear();
-			}
-			return blockState;
-		},
+		get,
 
 		toggle: (
 			messageId: number | string,
@@ -189,7 +455,7 @@ export const createSelectionState = () => {
 			itemIndex: number,
 			itemType: string
 		) => {
-			const blockState = this.get(messageId, blockIndex, itemType);
+			const blockState = get(messageId, blockIndex, itemType);
 			if (blockState.selected.has(itemIndex)) {
 				blockState.selected.delete(itemIndex);
 			} else {
@@ -216,7 +482,7 @@ export const createSelectionState = () => {
 			totalItems: number,
 			itemType: string
 		) => {
-			const blockState = this.get(messageId, blockIndex, itemType);
+			const blockState = get(messageId, blockIndex, itemType);
 			const allSelected = blockState.selected.size === totalItems && totalItems > 0;
 			if (allSelected) {
 				blockState.selected.clear();

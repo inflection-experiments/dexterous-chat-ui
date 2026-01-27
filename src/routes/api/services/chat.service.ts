@@ -32,11 +32,11 @@ export const sendMessageToMastra = async (
 		const response = await post_(url, body);
 
 		// Clear related cache entries after sending message
-		const keysToBeDeleted = [
-			`req-${Helper.uuidToBase64(userId)}:getConversationMessages-${Helper.uuidToBase64(conversationId)}`,
-			`req-${Helper.uuidToBase64(userId)}:getConversationMessagesById-${Helper.uuidToBase64(conversationId)}`
-		];
-		await RequestResponseCacheService.findAndClear(keysToBeDeleted);
+		// const keysToBeDeleted = [
+		// 	`req-${Helper.uuidToBase64(userId)}:getConversationMessages-${Helper.uuidToBase64(conversationId)}`,
+		// 	`req-${Helper.uuidToBase64(userId)}:getConversationMessagesById-${Helper.uuidToBase64(conversationId)}`
+		// ];
+		// await RequestResponseCacheService.findAndClear(keysToBeDeleted);
 
 		return ResponseHandler.processBackendResponseToMessage(response);
 	} catch (error) {

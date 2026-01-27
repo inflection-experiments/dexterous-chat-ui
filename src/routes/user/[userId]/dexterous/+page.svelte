@@ -1,12 +1,15 @@
 <script lang="ts">
-	import type { Message } from '$lib/types/chat';
+	import type { Message, StructuredResponse, LLMUIBlock } from '$lib/types/chat';
 	import type { Conversation } from '$lib/types/botTypes';
+	import type { StreamStartEvent, StreamChunkEvent, StreamEndEvent, StreamErrorEvent, ConnectionStatus } from '$lib/types/streaming';
 	import Icon from '@iconify/svelte';
 	import type { PageServerData } from './$types';
-	import { parseMarkdown, reconstructMarkdown, deleteTableRowFromBlocks, deleteListItemFromBlocks } from '$lib/utils/markdownParser';
+	import { parseMarkdown, reconstructMarkdown } from '$lib/utils/markdownParser';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import MessageComponent from '$lib/components/Message.svelte';
+	import { onMount, onDestroy } from 'svelte';
+	import { websocketService } from '$lib/services/websocket.service';
 	import {
 		sortConversations,
 		extractConversationId,
@@ -18,7 +21,8 @@
 		createConversation,
 		fetchConversationMessages,
 		deleteConversationAPI,
-		createSelectionState
+		createSelectionState,
+		buildAssistantMessageFromResult
 	} from '$lib/utils/ChatUtils';
 
 	let { data }: { data: PageServerData } = $props();
@@ -27,6 +31,7 @@
 	const USER_ID = '74f22a5f-8ed2-45ce-af2e-ac4c32d824f4';
 	const REFERENCE_MESSAGE_ID = '123e4567-e89b-12d3-a456-426655440000';
 	const PROJECT_ID = 'df4c6df0-594a-4dcb-8754-49eead9743f3';
+	const WEBSOCKET_URL = 'http://localhost:2345'; // Backend WebSocket URL
 
 	// State
 	let conversations = $state<Conversation[]>(sortConversations(data.conversations || []));
@@ -42,11 +47,148 @@
 	let conversationToDelete = $state<string | null>(null);
 	let deletingConversation = $state(false);
 
+	// WebSocket streaming state
+	let wsConnectionStatus = $state<ConnectionStatus>('disconnected');
+	let isStreaming = $state(false);
+	let streamingMessageId = $state<string | null>(null);
+	let streamingBlocks = $state<LLMUIBlock[]>([]);
+	let streamingProgress = $state(0);
+
 	// Parsed content and selection management
 	let parsedMessageContent = $state(new Map<number | string, any[]>());
 	const selectionManager = createSelectionState();
 	let selectionState = $state(selectionManager.getState());
 	let conversationTitles = $state(new Map<string, string>());
+
+	// ==========================================
+	// WEBSOCKET INITIALIZATION
+	// ==========================================
+
+	onMount(() => {
+		initializeWebSocket();
+	});
+
+	onDestroy(() => {
+		websocketService.disconnect();
+	});
+
+	const initializeWebSocket = () => {
+		websocketService.connect(WEBSOCKET_URL, {
+			onConnectionChange: handleConnectionChange,
+			onStreamStart: handleStreamStart,
+			onStreamChunk: handleStreamChunk,
+			onStreamEnd: handleStreamEnd,
+			onStreamError: handleStreamError
+		});
+	};
+
+	const handleConnectionChange = (status: ConnectionStatus) => {
+		wsConnectionStatus = status;
+		console.log('WebSocket connection status:', status);
+	};
+
+	const handleStreamStart = (event: StreamStartEvent) => {
+		console.log('Stream started:', event.messageId);
+		isStreaming = true;
+		streamingMessageId = event.messageId;
+		streamingBlocks = [];
+		streamingProgress = 0;
+
+		// Add a placeholder streaming message
+		const streamingMessage: Message = {
+			id: event.messageId,
+			Content: '',
+			Role: 'Assistant',
+			StructuredResponse: { blocks: [] }
+		};
+		messages = [...messages, streamingMessage];
+		scrollToBottom();
+	};
+
+	const handleStreamChunk = (event: StreamChunkEvent, block: LLMUIBlock | null) => {
+		console.log('Stream chunk received:', event.chunk.sequence, '/', event.chunk.totalChunks);
+
+		if (block) {
+			streamingBlocks = [...streamingBlocks, block];
+
+			// Update the streaming message with new blocks
+			messages = messages.map((msg) => {
+				if (msg.id === streamingMessageId) {
+					return {
+						...msg,
+						StructuredResponse: { blocks: streamingBlocks }
+					};
+				}
+				return msg;
+			});
+		}
+
+		// Update progress
+		if (event.chunk.totalChunks) {
+			streamingProgress = Math.round((event.chunk.sequence / event.chunk.totalChunks) * 100);
+		}
+
+		scrollToBottom();
+	};
+
+	const handleStreamEnd = (event: StreamEndEvent) => {
+		console.log('Stream ended:', event.messageId, 'total chunks:', event.totalChunks);
+		isStreaming = false;
+		isLoading = false;
+		streamingProgress = 100;
+
+		// Finalize the message
+		messages = messages.map((msg) => {
+			if (msg.id === streamingMessageId) {
+				// Extract text content from blocks for fallback
+				const textContent = streamingBlocks
+					.filter((b) => b.renderType === 'text' || b.renderType === 'markdown')
+					.map((b) => (typeof b.content === 'string' ? b.content : ''))
+					.join('\n\n');
+
+				return {
+					...msg,
+					Content: textContent || 'Response received',
+					StructuredResponse: { blocks: streamingBlocks }
+				};
+			}
+			return msg;
+		});
+
+		// Parse markdown for the finalized message
+		const finalizedMsg = messages.find((m) => m.id === streamingMessageId);
+		if (finalizedMsg && finalizedMsg.Content) {
+			parsedMessageContent.set(finalizedMsg.id, parseMarkdown(finalizedMsg.Content));
+			parsedMessageContent = new Map(parsedMessageContent);
+		}
+
+		streamingMessageId = null;
+		streamingBlocks = [];
+		scrollToBottom();
+	};
+
+	const handleStreamError = (event: StreamErrorEvent) => {
+		console.error('Stream error:', event.error);
+		isStreaming = false;
+		isLoading = false;
+
+		// Update the streaming message to show error
+		if (streamingMessageId) {
+			messages = messages.map((msg) => {
+				if (msg.id === streamingMessageId) {
+					return {
+						...msg,
+						Content: `Error: ${event.error}`,
+						StructuredResponse: undefined
+					};
+				}
+				return msg;
+			});
+		}
+
+		streamingMessageId = null;
+		streamingBlocks = [];
+	};
 
 	// Auto-select latest conversation on mount
 	let conversationsInitialized = $state(false);
@@ -131,6 +273,7 @@
 			Role: 'User'
 		};
 		messages = [...messages, userMessage];
+		console.log('Added user message:', userMessage, 'Total messages:', messages.length);
 		
 		if (selectedConversationId && !conversationTitles.has(selectedConversationId)) {
 			conversationTitles.set(selectedConversationId, content);
@@ -140,19 +283,21 @@
 		return userMessage;
 	};
 
-	const addAssistantMessage = (content: string) => {
-		const assistantMessage: Message = {
-			id: Date.now() + 1,
-			Content: content,
-			Role: 'Assistant'
-		};
-		messages = [...messages, assistantMessage];
-		parsedMessageContent.set(assistantMessage.id, parseMarkdown(content));
-		return assistantMessage;
+	const addAssistantMessage = (message: Message) => {
+		messages = [...messages, message];
+		console.log('Added assistant message:', message, 'Total messages:', messages.length);
+		if (message.Content) {
+			parsedMessageContent.set(message.id, parseMarkdown(message.Content));
+		}
+		return message;
 	};
 
 	const addErrorMessage = () => {
-		addAssistantMessage('Sorry, I encountered an error. Please try again.');
+		addAssistantMessage({
+			id: Date.now(),
+			Content: 'Sorry, I encountered an error. Please try again.',
+			Role: 'Assistant'
+		});
 	};
 
 	// API Handlers
@@ -170,19 +315,24 @@
 
 			selectedConversationId = newId;
 			messages = [];
-			parsedMessageContent.clear();
+			parsedMessageContent = new Map(); // Reassign for reactivity
 			selectionManager.clear();
+			selectionState = selectionManager.getState();
 
-			conversations = sortConversations([
-				{
-					id: newId,
-					userId: data.userId,
-					status: 'active',
-					createdAt: new Date().toISOString(),
-					updatedAt: new Date().toISOString()
-				},
-				...conversations
-			]);
+			const newConversation: Conversation = {
+				id: newId,
+				userId: data.userId,
+				status: 'active',
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString()
+			};
+
+			conversations = sortConversations([newConversation, ...conversations]);
+
+			// Join WebSocket room for real-time streaming
+			if (wsConnectionStatus === 'connected') {
+				websocketService.joinConversation(newId);
+			}
 
 			return true;
 		} catch (error) {
@@ -193,7 +343,7 @@
 
 	const sendMessage = async () => {
 		const trimmedMessage = newMessageText.trim();
-		if (!trimmedMessage || isLoading) return;
+		if (!trimmedMessage || isLoading || isStreaming) return;
 
 		if (!(await ensureConversation())) return;
 
@@ -203,28 +353,54 @@
 		scrollToBottom();
 
 		try {
+			// Send message via HTTP API
+			// The backend will emit WebSocket events for streaming if connected
 			const result = await sendChatMessage(selectedConversationId, trimmedMessage, USER_ID, REFERENCE_MESSAGE_ID);
-			const content = extractAssistantContent(result);
+			console.log('Response from backend:', JSON.stringify(result, null, 2));
 
-			if (content) {
-				addAssistantMessage(content);
-				scrollToBottom();
-			} else {
-				console.warn('No assistant content found in response');
+			// If we're NOT receiving via WebSocket streaming, handle the HTTP response
+			// The WebSocket handlers will take care of streaming messages
+			if (!isStreaming) {
+				const assistantMessage = buildAssistantMessageFromResult(result, Date.now() + 1);
+				console.log('Built assistant message:', assistantMessage);
+
+				if (assistantMessage) {
+					addAssistantMessage(assistantMessage);
+					scrollToBottom();
+				} else {
+					console.warn('No assistant content found in response. Full response:', result);
+					addAssistantMessage({
+						id: Date.now() + 1,
+						Content: 'Received response but could not parse it. Please check console for details.',
+						Role: 'Assistant'
+					});
+				}
+				isLoading = false;
 			}
+			// If streaming, isLoading will be set to false in handleStreamEnd
 		} catch (error) {
 			console.error('Error sending message:', error);
 			addErrorMessage();
-		} finally {
 			isLoading = false;
 		}
 	};
 
 	const selectConversation = async (conversationId: string) => {
+		// Leave previous conversation room if any
+		if (selectedConversationId && wsConnectionStatus === 'connected') {
+			websocketService.leaveConversation(selectedConversationId);
+		}
+
 		selectedConversationId = conversationId;
 		messages = [];
-		parsedMessageContent.clear();
+		parsedMessageContent = new Map(); // Reassign for reactivity
 		selectionManager.clear();
+		selectionState = selectionManager.getState();
+
+		// Join new conversation room for real-time streaming
+		if (wsConnectionStatus === 'connected') {
+			websocketService.joinConversation(conversationId);
+		}
 
 		try {
 			const result = await fetchConversationMessages(conversationId);
@@ -251,12 +427,14 @@
 
 				messages = convertedMessages;
 
-				// Parse markdown for assistant messages
+				// Parse markdown for assistant messages - create new Map for reactivity
+				const newParsedContent = new Map<number | string, any[]>();
 				messages.forEach((msg) => {
 					if (msg.Role === 'Assistant' && msg.Content) {
-						parsedMessageContent.set(msg.id, parseMarkdown(msg.Content));
+						newParsedContent.set(msg.id, parseMarkdown(msg.Content));
 					}
 				});
+				parsedMessageContent = newParsedContent;
 
 				await new Promise((resolve) => setTimeout(resolve, 150));
 				scrollToBottom();
@@ -268,6 +446,11 @@
 
 	const newChat = async () => {
 		try {
+			// Leave previous conversation room if any
+			if (selectedConversationId && wsConnectionStatus === 'connected') {
+				websocketService.leaveConversation(selectedConversationId);
+			}
+
 			const result = await createConversation(PROJECT_ID, data.userId);
 			const newConversationId = extractConversationId(result);
 
@@ -276,23 +459,30 @@
 				return;
 			}
 
+			// Update state - reassign to trigger Svelte 5 reactivity
 			selectedConversationId = newConversationId;
 			messages = [];
 			newMessageText = '';
-			parsedMessageContent.clear();
+			parsedMessageContent = new Map(); // Reassign instead of clear() for reactivity
 			selectionManager.clear();
+			selectionState = selectionManager.getState();
 
 			const newConv = result.Data || {};
-			conversations = sortConversations([
-				{
-					id: newConversationId,
-					userId: newConv.userId || data.userId,
-					status: newConv.status || 'active',
-					createdAt: newConv.createdAt || new Date().toISOString(),
-					updatedAt: newConv.updatedAt || new Date().toISOString()
-				},
-				...conversations
-			]);
+			const newConversation: Conversation = {
+				id: newConversationId,
+				userId: newConv.userId || data.userId,
+				status: (newConv.status as 'active' | 'archived' | 'deleted') || 'active',
+				createdAt: newConv.createdAt || new Date().toISOString(),
+				updatedAt: newConv.updatedAt || new Date().toISOString()
+			};
+
+			// Create new array to ensure reactivity
+			conversations = sortConversations([newConversation, ...conversations]);
+
+			// Join WebSocket room for real-time streaming
+			if (wsConnectionStatus === 'connected') {
+				websocketService.joinConversation(newConversationId);
+			}
 		} catch (error) {
 			console.error('Error creating new conversation:', error);
 			alert('Error creating new conversation. Please try again.');
@@ -322,8 +512,9 @@
 			if (selectedConversationId === conversationToDelete) {
 				selectedConversationId = '';
 				messages = [];
-				parsedMessageContent.clear();
+				parsedMessageContent = new Map(); // Reassign for reactivity
 				selectionManager.clear();
+				selectionState = selectionManager.getState();
 			}
 		} catch (error) {
 			console.error('Error deleting conversation:', error);
@@ -353,165 +544,261 @@
 		selectionState = selectionManager.toggle(messageId, blockIndex, itemIndex, itemType);
 	};
 
+	const handleButtonAction = async (button: any, messageId: number | string) => {
+		console.log('Button action:', button, messageId);
+		// TODO: Implement button action handling
+	};
+
 	const handleDeleteTableRow = (messageId: number | string, blockIndex: number, rowIndex: number) => {
-		const parsed = parsedMessageContent.get(messageId);
-		if (parsed && parsed[blockIndex]?.type === 'table') {
-			const newParsed = deleteTableRowFromBlocks(parsed, blockIndex, rowIndex);
-			parsedMessageContent.set(messageId, newParsed);
-			updateMessageContent(messageId);
-		}
+		console.log('Delete table row:', messageId, blockIndex, rowIndex);
+		// TODO: Implement table row deletion
 	};
 
 	const handleDeleteListItem = (messageId: number | string, blockIndex: number, itemIndex: number) => {
-		const parsed = parsedMessageContent.get(messageId);
-		if (parsed && (parsed[blockIndex]?.type === 'list' || parsed[blockIndex]?.type === 'checklist')) {
-			const newParsed = deleteListItemFromBlocks(parsed, blockIndex, itemIndex);
-			parsedMessageContent.set(messageId, newParsed);
-			updateMessageContent(messageId);
-		}
-	};
-
-	const collectSelectedItems = (messageId: number | string): string => {
-		const selectedItems: any[] = [];
-		const messageSelections = selectionState.get(messageId);
-		
-		if (messageSelections) {
-			messageSelections.forEach((state, blockIndex) => {
-				if (state.type === 'table-rows' && state.selected.size > 0) {
-					const parsed = parsedMessageContent.get(messageId);
-					if (parsed && parsed[blockIndex]?.type === 'table') {
-						const table = parsed[blockIndex];
-						const selectedRows = Array.from(state.selected).map((rowIdx) => {
-							const row = table.content.rows[rowIdx];
-							const rowData: any = {};
-							table.content.headers.forEach((header: string, idx: number) => {
-								rowData[header] = row[idx];
-							});
-							return rowData;
-						});
-						selectedItems.push(...selectedRows);
-					}
-				}
-			});
-		}
-
-		if (selectedItems.length === 0) return '';
-
-		return selectedItems
-			.map((item, idx) => {
-				const itemDetails = Object.entries(item)
-					.map(([key, value]) => `${key}: ${value}`)
-					.join(', ');
-				return `${idx + 1}. ${itemDetails}`;
-			})
-			.join('\n');
-	};
-
-	const handleButtonAction = async (button: any, messageId: number | string) => {
-		if (!selectedConversationId) {
-			alert('Please start a conversation first');
-			return;
-		}
-
-		try {
-			let messageText = '';
-
-			if (button.action === 'confirm' && button.operation === 'save') {
-				const selectedItems = collectSelectedItems(messageId);
-				
-				if (button.payload) {
-					const payload = JSON.parse(button.payload);
-					const itemType = payload.itemType || 'services';
-					messageText = selectedItems
-						? `I want to save these ${itemType}:\n\n${selectedItems}`
-						: `I want to save ${payload.count || 0} ${itemType} to the database.`;
-				} else {
-					messageText = selectedItems
-						? `I want to save these items:\n\n${selectedItems}`
-						: 'I want to save the items to the database.';
-				}
-			} else if (button.action === 'modify') {
-				messageText = button.text || 'I want to modify the items.';
-			} else if (button.action !== 'cancel' && button.action !== 'cancell') {
-				messageText = button.text || `Action: ${button.action}`;
-			}
-
-			if (messageText) {
-				addUserMessage(messageText);
-				isLoading = true;
-				scrollToBottom();
-
-				const result = await sendChatMessage(selectedConversationId, messageText, USER_ID, REFERENCE_MESSAGE_ID);
-				const content = extractAssistantContent(result);
-
-				if (content) {
-					addAssistantMessage(content);
-					scrollToBottom();
-				}
-
-				isLoading = false;
-			}
-		} catch (error) {
-			console.error('Error handling button action:', error);
-			alert('Error processing button action');
-			isLoading = false;
-		}
+		console.log('Delete list item:', messageId, blockIndex, itemIndex);
+		// TODO: Implement list item deletion
 	};
 
 	const saveSelectedRowsToStorage = async () => {
-		if (!selectedConversationId) {
-			alert('Please start a conversation first');
-			return;
-		}
-
-		const selectedServices: any[] = [];
-		selectionState.forEach((messageSelections, messageId) => {
-			messageSelections.forEach((state, blockIndex) => {
-				if (state.type === 'table-rows' && state.selected.size > 0) {
-					const parsed = parsedMessageContent.get(messageId);
-					if (parsed && parsed[blockIndex]?.type === 'table') {
-						const table = parsed[blockIndex];
-						const selectedRows = Array.from(state.selected).map((rowIdx) => {
-							const row = table.content.rows[rowIdx];
-							const serviceData: any = {};
-							table.content.headers.forEach((header: string, idx: number) => {
-								serviceData[header] = row[idx];
-							});
-							return serviceData;
-						});
-						selectedServices.push(...selectedRows);
-					}
-				}
-			});
-		});
-
-		if (selectedServices.length === 0) {
-			alert('No services selected. Please select services first.');
-			return;
-		}
-
-		const serviceNames = selectedServices.map((service, idx) => {
-			const name = service['Service Name'] || service['Name'] || service['#'] || `Service ${idx + 1}`;
-			const description = service['Description'] || service['description'] || '';
-			return description ? `${name}: ${description}` : name;
-		});
-
-		const messageText = `I want to save these services to the database:\n\n${serviceNames.join('\n')}`;
-
-		try {
-			await handleButtonAction({ action: 'confirm', operation: 'save', text: messageText }, -1);
-			
-			selectionState.forEach((messageSelections) => {
-				messageSelections.forEach((state) => {
-					if (state.type === 'table-rows') state.selected.clear();
-				});
-			});
-			selectionState = new Map(selectionState);
-		} catch (error) {
-			console.error('Error saving services:', error);
-			alert('Error saving services to database. Please try again.');
-		}
+		console.log('Save selected rows to storage');
+		// TODO: Implement save selected rows
 	};
+
+	// const handleDeleteTableRow = (messageId: number | string, blockIndex: number, rowIndex: number) => {
+	// 	const parsed = parsedMessageContent.get(messageId);
+	// 	if (parsed && parsed[blockIndex]?.type === 'table') {
+	// 		const newParsed = deleteTableRowFromBlocks(parsed, blockIndex, rowIndex);
+	// 		parsedMessageContent.set(messageId, newParsed);
+	// 		updateMessageContent(messageId);
+	// 	}
+	// };
+
+	// const handleDeleteListItem = (messageId: number | string, blockIndex: number, itemIndex: number) => {
+	// 	const parsed = parsedMessageContent.get(messageId);
+	// 	if (parsed && (parsed[blockIndex]?.type === 'list' || parsed[blockIndex]?.type === 'checklist')) {
+	// 		const newParsed = deleteListItemFromBlocks(parsed, blockIndex, itemIndex);
+	// 		parsedMessageContent.set(messageId, newParsed);
+	// 		updateMessageContent(messageId);
+	// 	}
+	// };
+
+	// const collectSelectedItems = (messageId: number | string): string => {
+	// 	const selectedItems: any[] = [];
+	// 	const messageSelections = selectionState.get(messageId);
+		
+	// 	if (messageSelections) {
+	// 		messageSelections.forEach((state, blockIndex) => {
+	// 			if (state.type === 'table-rows' && state.selected.size > 0) {
+	// 				const parsed = parsedMessageContent.get(messageId);
+	// 				if (parsed && parsed[blockIndex]?.type === 'table') {
+	// 					const table = parsed[blockIndex];
+	// 					const selectedRows = Array.from(state.selected).map((rowIdx) => {
+	// 						const row = table.content.rows[rowIdx];
+	// 						const rowData: any = {};
+	// 						table.content.headers.forEach((header: string, idx: number) => {
+	// 							rowData[header] = row[idx];
+	// 						});
+	// 						return rowData;
+	// 					});
+	// 					selectedItems.push(...selectedRows);
+	// 				}
+	// 			}
+	// 		});
+	// 	}
+
+	// 	if (selectedItems.length === 0) return '';
+
+	// 	return selectedItems
+	// 		.map((item, idx) => {
+	// 			const itemDetails = Object.entries(item)
+	// 				.map(([key, value]) => `${key}: ${value}`)
+	// 				.join(', ');
+	// 			return `${idx + 1}. ${itemDetails}`;
+	// 		})
+	// 		.join('\n');
+	// };
+
+	// const handleRadioChange = async (
+	// 	radioGroup: any,
+	// 	selectedValue: string,
+	// 	messageId: number | string
+	// ) => {
+	// 	if (!selectedConversationId) {
+	// 		alert('Please start a conversation first');
+	// 		return;
+	// 	}
+
+	// 	try {
+	// 		const selectedOption = radioGroup.options.find((opt: any) => opt.value === selectedValue);
+	// 		const messageText = `Selected ${radioGroup.label || radioGroup.name}: ${selectedOption?.label || selectedValue}`;
+	// 		addUserMessage(messageText);
+	// 		isLoading = true;
+	// 		scrollToBottom();
+
+	// 		const result = await sendChatMessage(
+	// 			selectedConversationId,
+	// 			messageText,
+	// 			USER_ID,
+	// 			REFERENCE_MESSAGE_ID
+	// 		);
+	// 		const content = extractAssistantContent(result);
+
+	// 		if (content) {
+	// 			addAssistantMessage(content);
+	// 			scrollToBottom();
+	// 		}
+
+	// 		isLoading = false;
+	// 	} catch (error) {
+	// 		console.error('Error handling radio change:', error);
+	// 		alert('Error processing radio selection');
+	// 		isLoading = false;
+	// 	}
+	// };
+
+	// const handleDropdownChange = async (
+	// 	dropdown: any,
+	// 	selectedValue: string,
+	// 	messageId: number | string
+	// ) => {
+	// 	if (!selectedConversationId) {
+	// 		alert('Please start a conversation first');
+	// 		return;
+	// 	}
+
+	// 	try {
+	// 		const messageText = `Selected ${dropdown.label || dropdown.name}: ${selectedValue}`;
+	// 		addUserMessage(messageText);
+	// 		isLoading = true;
+	// 		scrollToBottom();
+
+	// 		const result = await sendChatMessage(
+	// 			selectedConversationId,
+	// 			messageText,
+	// 			USER_ID,
+	// 			REFERENCE_MESSAGE_ID
+	// 		);
+	// 		const content = extractAssistantContent(result);
+
+	// 		if (content) {
+	// 			addAssistantMessage(content);
+	// 			scrollToBottom();
+	// 		}
+
+	// 		isLoading = false;
+	// 	} catch (error) {
+	// 		console.error('Error handling dropdown change:', error);
+	// 		alert('Error processing dropdown selection');
+	// 		isLoading = false;
+	// 	}
+	// };
+
+	// const handleButtonAction = async (button: any, messageId: number | string) => {
+	// 	if (!selectedConversationId) {
+	// 		alert('Please start a conversation first');
+	// 		return;
+	// 	}
+
+	// 	try {
+	// 		let messageText = '';
+
+	// 		if (button.action === 'confirm' && button.operation === 'save') {
+	// 			const selectedItems = collectSelectedItems(messageId);
+				
+	// 			if (button.payload) {
+	// 				const payload = JSON.parse(button.payload);
+	// 				const itemType = payload.itemType || 'services';
+	// 				messageText = selectedItems
+	// 					? `I want to save these ${itemType}:\n\n${selectedItems}`
+	// 					: `I want to save ${payload.count || 0} ${itemType} to the database.`;
+	// 			} else {
+	// 				messageText = selectedItems
+	// 					? `I want to save these items:\n\n${selectedItems}`
+	// 					: 'I want to save the items to the database.';
+	// 			}
+	// 		} else if (button.action === 'modify') {
+	// 			messageText = button.text || 'I want to modify the items.';
+	// 		} else if (button.action !== 'cancel' && button.action !== 'cancell') {
+	// 			messageText = button.text || `Action: ${button.action}`;
+	// 		}
+
+	// 		if (messageText) {
+	// 			addUserMessage(messageText);
+	// 			isLoading = true;
+	// 			scrollToBottom();
+
+	// 			const result = await sendChatMessage(selectedConversationId, messageText, USER_ID, REFERENCE_MESSAGE_ID);
+	// 			const content = extractAssistantContent(result);
+
+	// 			if (content) {
+	// 				addAssistantMessage(content);
+	// 				scrollToBottom();
+	// 			}
+
+	// 			isLoading = false;
+	// 		}
+	// 	} catch (error) {
+	// 		console.error('Error handling button action:', error);
+	// 		alert('Error processing button action');
+	// 		isLoading = false;
+	// 	}
+	// };
+
+	// const saveSelectedRowsToStorage = async () => {
+	// 	if (!selectedConversationId) {
+	// 		alert('Please start a conversation first');
+	// 		return;
+	// 	}
+
+	// 	const selectedServices: any[] = [];
+	// 	selectionState.forEach((messageSelections, messageId) => {
+	// 		messageSelections.forEach((state, blockIndex) => {
+	// 			if (state.type === 'table-rows' && state.selected.size > 0) {
+	// 				const parsed = parsedMessageContent.get(messageId);
+	// 				if (parsed && parsed[blockIndex]?.type === 'table') {
+	// 					const table = parsed[blockIndex];
+	// 					const selectedRows = Array.from(state.selected).map((rowIdx) => {
+	// 						const row = table.content.rows[rowIdx];
+	// 						const serviceData: any = {};
+	// 						table.content.headers.forEach((header: string, idx: number) => {
+	// 							serviceData[header] = row[idx];
+	// 						});
+	// 						return serviceData;
+	// 					});
+	// 					selectedServices.push(...selectedRows);
+	// 				}
+	// 			}
+	// 		});
+	// 	});
+
+	// 	if (selectedServices.length === 0) {
+	// 		alert('No services selected. Please select services first.');
+	// 		return;
+	// 	}
+
+	// 	const serviceNames = selectedServices.map((service, idx) => {
+	// 		const name = service['Service Name'] || service['Name'] || service['#'] || `Service ${idx + 1}`;
+	// 		const description = service['Description'] || service['description'] || '';
+	// 		return description ? `${name}: ${description}` : name;
+	// 	});
+
+	// 	const messageText = `I want to save these services to the database:\n\n${serviceNames.join('\n')}`;
+
+	// 	try {
+	// 		await handleButtonAction({ action: 'confirm', operation: 'save', text: messageText }, -1);
+			
+	// 		selectionState.forEach((messageSelections) => {
+	// 			messageSelections.forEach((state) => {
+	// 				if (state.type === 'table-rows') state.selected.clear();
+	// 			});
+	// 		});
+	// 		selectionState = new Map(selectionState);
+	// 	} catch (error) {
+	// 		console.error('Error saving services:', error);
+	// 		alert('Error saving services to database. Please try again.');
+	// 	}
+	// };
+	
 </script>
 
 <div class="flex h-screen overflow-hidden bg-gradient-to-br from-[#0a0a1a] via-[#1a1a2e] to-[#0f0f23] font-sans text-white antialiased">
@@ -528,6 +815,28 @@
 	/>
 
 	<main class="relative flex h-screen flex-1 flex-col overflow-hidden">
+		<!-- WebSocket Connection Indicator -->
+		<div class="absolute top-4 right-4 z-10 flex items-center gap-2">
+			<div
+				class="h-2 w-2 rounded-full {wsConnectionStatus === 'connected'
+					? 'bg-green-500'
+					: wsConnectionStatus === 'connecting'
+						? 'bg-yellow-500 animate-pulse'
+						: wsConnectionStatus === 'error'
+							? 'bg-red-500'
+							: 'bg-gray-500'}"
+			></div>
+			<span class="text-xs text-white/50">
+				{wsConnectionStatus === 'connected'
+					? 'Live'
+					: wsConnectionStatus === 'connecting'
+						? 'Connecting...'
+						: wsConnectionStatus === 'error'
+							? 'Connection Error'
+							: 'Offline'}
+			</span>
+		</div>
+
 		{#if messages.length === 0}
 			<div class="relative flex h-full flex-col items-center justify-start px-8 pt-16 pb-1 text-center">
 				<div class="relative mb-12">
@@ -554,10 +863,12 @@
 						onDeleteRow={handleDeleteTableRow}
 						onDeleteItem={handleDeleteListItem}
 						onSaveSelected={saveSelectedRowsToStorage}
-					/>
+						/>
+						<!-- onDropdownChange={handleDropdownChange}
+						onRadioChange={handleRadioChange} -->
 				{/each}
 
-				{#if isLoading}
+				{#if isLoading && !isStreaming}
 					<div class="mb-6 flex animate-[fadeInUp_0.4s_ease-out] items-start gap-3">
 						<div class="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-[10px] bg-gradient-to-br from-[#ff6b35] to-[#f7931e] text-white shadow-[0_4px_12px_rgba(255,107,53,0.3)]">
 							<Icon icon="mdi:layers" width="20" height="20" />
@@ -569,6 +880,18 @@
 								<span class="loader-dot" style="animation-delay: 0.3s;"></span>
 							</div>
 						</div>
+					</div>
+				{/if}
+
+				{#if isStreaming}
+					<div class="mb-2 flex items-center gap-2 px-12 text-xs text-white/50">
+						<div class="h-1 flex-1 overflow-hidden rounded-full bg-white/10">
+							<div
+								class="h-full bg-gradient-to-r from-[#ff6b35] to-[#f7931e] transition-all duration-300"
+								style="width: {streamingProgress}%"
+							></div>
+						</div>
+						<span class="min-w-[40px] text-right">{streamingProgress}%</span>
 					</div>
 				{/if}
 			</div>
