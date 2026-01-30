@@ -32,7 +32,7 @@
 	/**
 	 * Convert LLMUIBlock to block format for existing components
 	 */
-	function convertBlockToParsedBlock(block: LLMUIBlock, idx: number): any {
+	function convertBlockToParsedBlock(block: LLMUIBlock): any {
 		switch (block.renderType) {
 			case 'text':
 			case 'markdown':
@@ -41,7 +41,20 @@
 				return parseMarkdown(content);
 			case 'table':
 				if (Array.isArray(block.content) && block.content.length > 0) {
-					const headers = Object.keys(block.content[0]);
+					let headers = Object.keys(block.content[0]);
+					
+					// Reorder headers: Service Name should come before Status
+					const serviceNameIndex = headers.indexOf('Service Name');
+					const statusIndex = headers.indexOf('Status');
+					
+					if (serviceNameIndex !== -1 && statusIndex !== -1 && serviceNameIndex > statusIndex) {
+						// Remove Service Name from its current position
+						headers = headers.filter((_, idx) => idx !== serviceNameIndex);
+						// Insert Service Name before Status
+						const newStatusIndex = headers.indexOf('Status');
+						headers.splice(newStatusIndex, 0, 'Service Name');
+					}
+					
 					const rows = block.content.map((row: any) => headers.map((h) => String(row[h] || '')));
 					return [{
 						type: 'table',
@@ -98,8 +111,9 @@
 <div class="mb-2 text-[0.95rem] leading-[1.7] text-white">
 	<!-- Render blocks - keyed for streaming animation -->
 	{#each structuredResponse.blocks as block, idx (idx)}
-		{@const parsedBlocks = convertBlockToParsedBlock(block, idx)}
+		{@const parsedBlocks = convertBlockToParsedBlock(block)}
 		{#each parsedBlocks as parsedBlock, pIdx (`${idx}-${pIdx}`)}
+			<div class="block-appear" style="animation-delay: {idx * 50}ms">
 			{#if parsedBlock.type === 'h1'}
 				<h1 class="mt-4 mb-3 border-b-2 border-[#ff6b35] pb-2 text-2xl font-bold text-white first:mt-0">
 					{@html parseInlineFormatting(parsedBlock.content)}
@@ -200,7 +214,26 @@
 					{@html parseInlineFormatting(parsedBlock.content)}
 				</p>
 			{/if}
+			</div>
 		{/each}
 	{/each}
 </div>
+
+<style>
+	@keyframes blockAppear {
+		from {
+			opacity: 0;
+			transform: translateY(8px);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0);
+		}
+	}
+
+	.block-appear {
+		animation: blockAppear 0.3s ease-out forwards;
+		opacity: 0;
+	}
+</style>
 

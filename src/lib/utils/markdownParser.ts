@@ -417,10 +417,43 @@ export function parseMarkdown(md: string): ParsedBlock[] {
 
 export function parseTable(lines: string[]): TableData {
 	if (lines.length < 2) return { headers: [], rows: [] };
-	const headers = lines[0]
+	let headers = lines[0]
 		.split('|')
 		.map((h) => h.trim())
 		.filter((h) => h !== '');
+	
+	// Reorder headers: Service Name should come before Status
+	const serviceNameIndex = headers.indexOf('Service Name');
+	const statusIndex = headers.indexOf('Status');
+	
+	if (serviceNameIndex !== -1 && statusIndex !== -1 && serviceNameIndex > statusIndex) {
+		// Remove Service Name from its current position
+		headers = headers.filter((_, idx) => idx !== serviceNameIndex);
+		// Insert Service Name before Status
+		const newStatusIndex = headers.indexOf('Status');
+		headers.splice(newStatusIndex, 0, 'Service Name');
+		
+		// Reorder rows to match new header order
+		const rows = lines.slice(2).map((row) => {
+			const cells = row
+				.split('|')
+				.map((cell) => cell.trim())
+				.filter((cell) => cell !== '');
+			// Reorder cells to match reordered headers
+			const originalHeaders = lines[0]
+				.split('|')
+				.map((h) => h.trim())
+				.filter((h) => h !== '');
+			const reorderedCells: string[] = [];
+			headers.forEach((header) => {
+				const originalIndex = originalHeaders.indexOf(header);
+				reorderedCells.push(cells[originalIndex] || '');
+			});
+			return reorderedCells;
+		});
+		return { headers, rows };
+	}
+	
 	const rows = lines.slice(2).map((row) =>
 		row
 			.split('|')

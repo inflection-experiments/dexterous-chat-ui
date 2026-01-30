@@ -24,6 +24,8 @@
 		createSelectionState,
 		buildAssistantMessageFromResult
 	} from '$lib/utils/ChatUtils';
+	import { convertBotResponseItemToBlock } from '$lib/utils/chunkTransformer';
+	import type { BotResponseItem } from '$lib/types/streaming';
 
 	let { data }: { data: PageServerData } = $props();
 
@@ -188,6 +190,108 @@
 
 		streamingMessageId = null;
 		streamingBlocks = [];
+	};
+
+	/**
+	 * Extract BotResponse array from backend response
+	 */
+	const extractBotResponseArray = (result: any): BotResponseItem[] | null => {
+		// Check Data.BotResponse path
+		if (result?.Data?.BotResponse && Array.isArray(result.Data.BotResponse)) {
+			return result.Data.BotResponse;
+		}
+		// Check root level BotResponse
+		if (result?.BotResponse && Array.isArray(result.BotResponse)) {
+			return result.BotResponse;
+		}
+		return null;
+	};
+
+	/**
+	 * Progressive rendering of BotResponse chunks
+	 * Renders each chunk sequentially with a small delay for streaming effect
+	 */
+	const renderChunksProgressively = async (
+		botResponses: BotResponseItem[],
+		messageId: string | number
+	) => {
+		// Sort by Sequence
+		const sortedResponses = [...botResponses].sort((a, b) => (a.Sequence ?? 0) - (b.Sequence ?? 0));
+		const totalChunks = sortedResponses.length;
+
+		isStreaming = true;
+		streamingMessageId = String(messageId);
+		streamingBlocks = [];
+		streamingProgress = 0;
+
+		// Add placeholder message for streaming
+		const streamingMessage: Message = {
+			id: messageId,
+			Content: '',
+			Role: 'Assistant',
+			StructuredResponse: { blocks: [] }
+		};
+		messages = [...messages, streamingMessage];
+		scrollToBottom();
+
+		// Render each chunk progressively
+		for (let i = 0; i < sortedResponses.length; i++) {
+			const item = sortedResponses[i];
+			const block = convertBotResponseItemToBlock(item);
+
+			if (block) {
+				streamingBlocks = [...streamingBlocks, block];
+
+				// Update the message with new blocks
+				messages = messages.map((msg) => {
+					if (msg.id === messageId) {
+						return {
+							...msg,
+							StructuredResponse: { blocks: streamingBlocks }
+						};
+					}
+					return msg;
+				});
+
+				// Update progress
+				streamingProgress = Math.round(((i + 1) / totalChunks) * 100);
+				scrollToBottom();
+
+				// Add small delay between chunks for visual effect (skip delay for last chunk)
+				if (i < sortedResponses.length - 1) {
+					await new Promise((resolve) => setTimeout(resolve, 100));
+				}
+			}
+		}
+
+		// Finalize the message
+		const textContent = streamingBlocks
+			.filter((b) => b.renderType === 'text' || b.renderType === 'markdown')
+			.map((b) => (typeof b.content === 'string' ? b.content : ''))
+			.join('\n\n');
+
+		messages = messages.map((msg) => {
+			if (msg.id === messageId) {
+				return {
+					...msg,
+					Content: textContent || 'Response received',
+					StructuredResponse: { blocks: streamingBlocks }
+				};
+			}
+			return msg;
+		});
+
+		// Parse markdown for the finalized message
+		if (textContent) {
+			parsedMessageContent.set(messageId, parseMarkdown(textContent));
+			parsedMessageContent = new Map(parsedMessageContent);
+		}
+
+		isStreaming = false;
+		isLoading = false;
+		streamingMessageId = null;
+		streamingProgress = 100;
+		scrollToBottom();
 	};
 
 	// Auto-select latest conversation on mount
@@ -361,21 +465,31 @@
 			// If we're NOT receiving via WebSocket streaming, handle the HTTP response
 			// The WebSocket handlers will take care of streaming messages
 			if (!isStreaming) {
-				const assistantMessage = buildAssistantMessageFromResult(result, Date.now() + 1);
-				console.log('Built assistant message:', assistantMessage);
+				// Check if response has BotResponse array for progressive rendering
+				const botResponses = extractBotResponseArray(result);
 
-				if (assistantMessage) {
-					addAssistantMessage(assistantMessage);
-					scrollToBottom();
+				if (botResponses && botResponses.length > 0) {
+					// Use progressive rendering for chunked responses
+					console.log('Using progressive rendering for', botResponses.length, 'chunks');
+					await renderChunksProgressively(botResponses, Date.now() + 1);
 				} else {
-					console.warn('No assistant content found in response. Full response:', result);
-					addAssistantMessage({
-						id: Date.now() + 1,
-						Content: 'Received response but could not parse it. Please check console for details.',
-						Role: 'Assistant'
-					});
+					// Fallback to standard message building
+					const assistantMessage = buildAssistantMessageFromResult(result, Date.now() + 1);
+					console.log('Built assistant message:', assistantMessage);
+
+					if (assistantMessage) {
+						addAssistantMessage(assistantMessage);
+						scrollToBottom();
+					} else {
+						console.warn('No assistant content found in response. Full response:', result);
+						addAssistantMessage({
+							id: Date.now() + 1,
+							Content: 'Received response but could not parse it. Please check console for details.',
+							Role: 'Assistant'
+						});
+					}
+					isLoading = false;
 				}
-				isLoading = false;
 			}
 			// If streaming, isLoading will be set to false in handleStreamEnd
 		} catch (error) {
