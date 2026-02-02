@@ -40,19 +40,33 @@ class WebSocketService {
 	// Current streaming state
 	private streamingMessage: StreamingMessage | null = null;
 
+	// Deduplication: track active streaming session to ignore duplicate events
+	private activeStreamMessageId: string | null = null;
+	private processedChunkSequences = new Set<number>();
+
 	/**
 	 * Initialize WebSocket connection
 	 */
 	connect(serverUrl: string, callbacks?: WebSocketCallbacks): void {
 		if (this.socket?.connected) {
-			console.log('WebSocket already connected');
+			// Update callbacks even if already connected (component remount)
+			this.callbacks = callbacks || {};
+			console.log('WebSocket already connected, callbacks updated');
 			return;
+		}
+
+		// Clean up any existing socket to prevent duplicate listeners
+		if (this.socket) {
+			this.socket.removeAllListeners();
+			this.socket.disconnect();
+			this.socket = null;
 		}
 
 		this.callbacks = callbacks || {};
 		this.notifyConnectionChange('connecting');
 
 		this.socket = io(serverUrl, {
+			forceNew: true, // Prevent Socket.IO from returning a cached socket with old listeners
 			transports: ['websocket', 'polling'],
 			reconnection: true,
 			reconnectionAttempts: this.maxReconnectAttempts,
@@ -108,7 +122,20 @@ class WebSocketService {
 	 * Handle stream start event
 	 */
 	private handleStreamStart(event: StreamStartEvent): void {
+		// Deduplicate: ignore if we already have an active stream for this message
+		if (this.activeStreamMessageId === event.messageId) {
+			console.log('Duplicate stream-start ignored for:', event.messageId);
+			return;
+		}
+		// Ignore if any stream is already active (backend sent two different stream sessions)
+		if (this.activeStreamMessageId) {
+			console.log('Stream-start ignored - already streaming:', this.activeStreamMessageId);
+			return;
+		}
+
 		console.log('Stream started:', event.messageId, 'expecting', event.totalChunks, 'chunks');
+		this.activeStreamMessageId = event.messageId;
+		this.processedChunkSequences.clear();
 
 		// Initialize streaming message state
 		this.streamingMessage = {
@@ -130,6 +157,18 @@ class WebSocketService {
 	 */
 	private handleStreamChunk(event: StreamChunkEvent): void {
 		const { chunk } = event;
+
+		// Deduplicate: ignore chunks for a different/no active stream
+		if (!this.activeStreamMessageId || event.messageId !== this.activeStreamMessageId) {
+			return;
+		}
+		// Deduplicate: ignore if we already processed this sequence number
+		if (this.processedChunkSequences.has(chunk.sequence)) {
+			console.log(`Duplicate chunk ${chunk.sequence} ignored`);
+			return;
+		}
+		this.processedChunkSequences.add(chunk.sequence);
+
 		console.log(`Chunk ${chunk.sequence}/${chunk.totalChunks} received:`, chunk.chunkType);
 
 		if (this.streamingMessage) {
@@ -151,12 +190,22 @@ class WebSocketService {
 	 * Handle stream end event
 	 */
 	private handleStreamEnd(event: StreamEndEvent): void {
+		// Deduplicate: ignore if no active stream or already ended
+		if (!this.activeStreamMessageId) {
+			console.log('Duplicate stream-end ignored for:', event.messageId);
+			return;
+		}
+
 		console.log('Stream ended:', event.messageId, 'total', event.totalChunks, 'chunks');
 
 		if (this.streamingMessage) {
 			this.streamingMessage.isComplete = true;
 			this.streamingMessage.isStreaming = false;
 		}
+
+		// Clear active stream so duplicate end events and subsequent starts are handled correctly
+		this.activeStreamMessageId = null;
+		this.processedChunkSequences.clear();
 
 		this.callbacks.onStreamEnd?.(event);
 	}
@@ -276,11 +325,14 @@ class WebSocketService {
 	 */
 	disconnect(): void {
 		if (this.socket) {
+			this.socket.removeAllListeners();
 			this.socket.disconnect();
 			this.socket = null;
 		}
 		this.currentConversationId = null;
 		this.streamingMessage = null;
+		this.activeStreamMessageId = null;
+		this.processedChunkSequences.clear();
 		this.notifyConnectionChange('disconnected');
 	}
 }
