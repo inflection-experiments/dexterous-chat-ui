@@ -59,10 +59,36 @@ export enum ChunkType {
 
 export interface BotResponseItem {
 	Content: string | Record<string, any> | any[];
-	DataType: 'Text' | 'Json' | 'Object';
+	DataType: 'Text' | 'JSON' | 'Json' | 'Object';
 	Format: 'Plain' | 'Markdown' | 'Object' | 'ObjectArray';
 	RenderType: string;
 	Sequence: number;
+}
+
+/**
+ * Backend response format for streaming
+ */
+export interface BackendStreamResponse {
+	Status: string;
+	Message: string;
+	Data: {
+		ConversationId: string;
+		UserId: string;
+		ReferenceMessageId: string;
+		Channel: string;
+		Metadata: {
+			timestamp: string;
+			processedBy: string;
+			messageId: string;
+			chunksCount: number;
+		};
+		UserMessage: {
+			Id: string;
+			Content: string;
+			Timestamp: string;
+		};
+		BotResponse: BotResponseItem[];
+	};
 }
 
 // ==========================================

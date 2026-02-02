@@ -366,12 +366,14 @@ export const createConversation = async (projectId: string, userId: string) => {
 	});
 };
 
-export const fetchConversationMessages = async (conversationId: string) => {
-	return apiCall(`/api/server/conversations/${conversationId}/messages`);
+export const fetchConversationMessages = async (conversationId: string, userId?: string) => {
+	const params = userId ? `?userId=${userId}` : '';
+	return apiCall(`/api/server/conversations/${conversationId}/messages${params}`);
 };
 
-export const deleteConversationAPI = async (conversationId: string) => {
-	return apiCall(`/api/server/conversations/${conversationId}`, {
+export const deleteConversationAPI = async (conversationId: string, userId?: string) => {
+	const params = userId ? `?userId=${userId}` : '';
+	return apiCall(`/api/server/conversations/${conversationId}${params}`, {
 		method: 'DELETE'
 	});
 };

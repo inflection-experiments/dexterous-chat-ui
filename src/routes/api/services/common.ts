@@ -15,9 +15,8 @@ export const post_ = async (url: string, bodyObj: any) => {
 		const response = await res.json();
 		console.log('Response from dexterous service backend', JSON.stringify(response, null, 2));
 
-		if (!response.ok) {
-			console.error(`API Error: ${response.Message || response.statusText}`);
-			return response;
+		if (!res.ok) {
+			console.error(`API Error: ${res.status} - ${response.Message || res.statusText}`);
 		}
 		return response;
 	} catch (err) {
@@ -50,9 +49,8 @@ export const post__ = async (url: string, bodyObj: any, userId?: string) => {
 		const response = await res.json();
 		console.log('Response from dexterous service backend', JSON.stringify(response, null, 2));
 
-		if (!response.ok) {
-			console.error(`API Error: ${response.Message || response.statusText}`);
-			return response;
+		if (!res.ok) {
+			console.error(`API Error: ${res.status} - ${response.Message || res.statusText}`);
 		}
 		return response;
 	} catch (err) {
@@ -61,9 +59,9 @@ export const post__ = async (url: string, bodyObj: any, userId?: string) => {
 	}
 };
 
-export const get_ = async (url: string) => {
+export const get_ = async (url: string, extraHeaders?: Record<string, string>) => {
 	try {
-		const headers = { 'Content-Type': 'application/json' };
+		const headers: Record<string, string> = { 'Content-Type': 'application/json', ...extraHeaders };
 
 		console.log('Fetching from dexterous service backend', url);
 
@@ -74,9 +72,8 @@ export const get_ = async (url: string) => {
 		const response = await res.json();
 		console.log('Response from dexterous service backend', JSON.stringify(response, null, 2));
 
-		if (!response.ok) {
-			console.error(`API Error: ${response.Message || response.statusText}`);
-			return response;
+		if (!res.ok) {
+			console.error(`API Error: ${res.status} - ${response.Message || res.statusText}`);
 		}
 		return response;
 	} catch (err) {
@@ -85,9 +82,9 @@ export const get_ = async (url: string) => {
 	}
 };
 
-export const delete_ = async (url: string) => {
+export const delete_ = async (url: string, extraHeaders?: Record<string, string>) => {
 	try {
-		const headers = { 'Content-Type': 'application/json' };
+		const headers: Record<string, string> = { 'Content-Type': 'application/json', ...extraHeaders };
 
 		console.log('Deleting from dexterous service backend', url);
 

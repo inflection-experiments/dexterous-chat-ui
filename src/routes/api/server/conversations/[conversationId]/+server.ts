@@ -6,12 +6,13 @@ import { deleteConversation } from '../../../services/conversation.service';
 export const DELETE = async (event: RequestEvent) => {
 	try {
 		const conversationId = event.params.conversationId;
+		const userId = event.url.searchParams.get('userId') || event.request.headers.get('x-user-id') || '';
 
 		if (!conversationId) {
 			return json({ error: 'conversationId is required' }, { status: 400 });
 		}
 
-		const backendResponse = await deleteConversation(conversationId);
+		const backendResponse = await deleteConversation(conversationId, userId);
 		
 		// Check if deletion was successful
 		if (backendResponse && (backendResponse.Status === 'success' || backendResponse.status === 'success')) {

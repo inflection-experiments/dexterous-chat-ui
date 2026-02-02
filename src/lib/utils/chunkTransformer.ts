@@ -23,6 +23,95 @@ export function convertChunkToBlock(chunk: ResponseChunk): LLMUIBlock | null {
 }
 
 /**
+ * Convert a BotResponseItem directly to an LLMUIBlock
+ * Used for progressive rendering of HTTP responses
+ */
+export function convertBotResponseItemToBlock(item: BotResponseItem): LLMUIBlock | null {
+	if (!item || item.Content === undefined || item.Content === null) {
+		return null;
+	}
+
+	const dataType = normalizeDataType(item.DataType);
+	const format = normalizeFormat(item.Format);
+	const renderType = normalizeRenderTypeFromItem(item.RenderType, format);
+
+	return {
+		datatype: dataType,
+		format: format,
+		renderType: renderType,
+		content: item.Content
+	};
+}
+
+/**
+ * Normalize RenderType from BotResponseItem (without ChunkType context)
+ */
+function normalizeRenderTypeFromItem(
+	backendRenderType: string,
+	format: FormatType
+): RenderType {
+	const normalized = (backendRenderType || '').toLowerCase();
+
+	// Basic render types
+	if (normalized === 'markdown' || normalized === 'md') {
+		return 'markdown';
+	}
+	if (normalized === 'table' || normalized === 'twocolumntable') {
+		return 'table';
+	}
+	if (normalized === 'list') {
+		return 'list';
+	}
+	if (normalized === 'code') {
+		return 'code';
+	}
+	if (normalized === 'json') {
+		return 'json';
+	}
+	if (normalized === 'plaintext' || normalized === 'text') {
+		return format === 'markdown' ? 'markdown' : 'text';
+	}
+
+	// Interactive UI elements
+	if (normalized === 'button') {
+		return 'button';
+	}
+	if (normalized === 'dropdown') {
+		return 'dropdown';
+	}
+	if (normalized === 'radiobutton' || normalized === 'radio') {
+		return 'radioButton';
+	}
+	if (normalized === 'link') {
+		return 'link';
+	}
+	if (normalized === 'form') {
+		return 'form';
+	}
+	if (normalized === 'datepicker') {
+		return 'datePicker';
+	}
+	if (normalized === 'colorpicker') {
+		return 'colorPicker';
+	}
+	if (normalized === 'fileuploader') {
+		return 'fileUploader';
+	}
+	if (normalized === 'progressbar') {
+		return 'progressBar';
+	}
+	if (normalized === 'toggleswitch') {
+		return 'toggleSwitch';
+	}
+	if (normalized === 'slider') {
+		return 'slider';
+	}
+
+	// Default based on format
+	return format === 'markdown' ? 'markdown' : 'text';
+}
+
+/**
  * Normalize backend DataType to our DataType
  */
 function normalizeDataType(backendType: string): DataType {

@@ -24,6 +24,8 @@
 		createSelectionState,
 		buildAssistantMessageFromResult
 	} from '$lib/utils/ChatUtils';
+	import { convertBotResponseItemToBlock } from '$lib/utils/chunkTransformer';
+	import type { BotResponseItem } from '$lib/types/streaming';
 
 	let { data }: { data: PageServerData } = $props();
 
@@ -53,6 +55,11 @@
 	let streamingMessageId = $state<string | null>(null);
 	let streamingBlocks = $state<LLMUIBlock[]>([]);
 	let streamingProgress = $state(0);
+	// Mutex flag: whichever path (WebSocket or HTTP) claims the response first
+	// will set this to true, preventing the other path from creating a duplicate message
+	let responseClaimedForCurrentRequest = $state(false);
+	// Tracks whether WebSocket owns the current streaming session
+	let wsOwnsCurrentStream = $state(false);
 
 	// Parsed content and selection management
 	let parsedMessageContent = $state(new Map<number | string, any[]>());
@@ -89,7 +96,15 @@
 
 	const handleStreamStart = (event: StreamStartEvent) => {
 		console.log('Stream started:', event.messageId);
+
+		// Guard: if already streaming, ignore duplicate stream-start
+		if (isStreaming && streamingMessageId) {
+			console.log('Duplicate stream-start ignored in UI handler for:', event.messageId);
+			return;
+		}
+
 		isStreaming = true;
+		wsOwnsCurrentStream = true;
 		streamingMessageId = event.messageId;
 		streamingBlocks = [];
 		streamingProgress = 0;
@@ -106,6 +121,9 @@
 	};
 
 	const handleStreamChunk = (event: StreamChunkEvent, block: LLMUIBlock | null) => {
+		// If WebSocket doesn't own this streaming session, ignore chunks
+		if (!wsOwnsCurrentStream) return;
+
 		console.log('Stream chunk received:', event.chunk.sequence, '/', event.chunk.totalChunks);
 
 		if (block) {
@@ -132,6 +150,9 @@
 	};
 
 	const handleStreamEnd = (event: StreamEndEvent) => {
+		// If WebSocket doesn't own this streaming session, ignore end event
+		if (!wsOwnsCurrentStream) return;
+
 		console.log('Stream ended:', event.messageId, 'total chunks:', event.totalChunks);
 		isStreaming = false;
 		isLoading = false;
@@ -164,6 +185,7 @@
 
 		streamingMessageId = null;
 		streamingBlocks = [];
+		wsOwnsCurrentStream = false;
 		scrollToBottom();
 	};
 
@@ -188,6 +210,109 @@
 
 		streamingMessageId = null;
 		streamingBlocks = [];
+		wsOwnsCurrentStream = false;
+	};
+
+	/**
+	 * Extract BotResponse array from backend response
+	 */
+	const extractBotResponseArray = (result: any): BotResponseItem[] | null => {
+		// Check Data.BotResponse path
+		if (result?.Data?.BotResponse && Array.isArray(result.Data.BotResponse)) {
+			return result.Data.BotResponse;
+		}
+		// Check root level BotResponse
+		if (result?.BotResponse && Array.isArray(result.BotResponse)) {
+			return result.BotResponse;
+		}
+		return null;
+	};
+
+	/**
+	 * Progressive rendering of BotResponse chunks
+	 * Renders each chunk sequentially with a small delay for streaming effect
+	 */
+	const renderChunksProgressively = async (
+		botResponses: BotResponseItem[],
+		messageId: string | number
+	) => {
+		// Sort by Sequence
+		const sortedResponses = [...botResponses].sort((a, b) => (a.Sequence ?? 0) - (b.Sequence ?? 0));
+		const totalChunks = sortedResponses.length;
+
+		isStreaming = true;
+		streamingMessageId = String(messageId);
+		streamingBlocks = [];
+		streamingProgress = 0;
+
+		// Add placeholder message for streaming
+		const streamingMessage: Message = {
+			id: messageId,
+			Content: '',
+			Role: 'Assistant',
+			StructuredResponse: { blocks: [] }
+		};
+		messages = [...messages, streamingMessage];
+		scrollToBottom();
+
+		// Render each chunk progressively
+		for (let i = 0; i < sortedResponses.length; i++) {
+			const item = sortedResponses[i];
+			const block = convertBotResponseItemToBlock(item);
+
+			if (block) {
+				streamingBlocks = [...streamingBlocks, block];
+
+				// Update the message with new blocks
+				messages = messages.map((msg) => {
+					if (msg.id === messageId) {
+						return {
+							...msg,
+							StructuredResponse: { blocks: streamingBlocks }
+						};
+					}
+					return msg;
+				});
+
+				// Update progress
+				streamingProgress = Math.round(((i + 1) / totalChunks) * 100);
+				scrollToBottom();
+
+				// Add small delay between chunks for visual effect (skip delay for last chunk)
+				if (i < sortedResponses.length - 1) {
+					await new Promise((resolve) => setTimeout(resolve, 100));
+				}
+			}
+		}
+
+		// Finalize the message
+		const textContent = streamingBlocks
+			.filter((b) => b.renderType === 'text' || b.renderType === 'markdown')
+			.map((b) => (typeof b.content === 'string' ? b.content : ''))
+			.join('\n\n');
+
+		messages = messages.map((msg) => {
+			if (msg.id === messageId) {
+				return {
+					...msg,
+					Content: textContent || 'Response received',
+					StructuredResponse: { blocks: streamingBlocks }
+				};
+			}
+			return msg;
+		});
+
+		// Parse markdown for the finalized message
+		if (textContent) {
+			parsedMessageContent.set(messageId, parseMarkdown(textContent));
+			parsedMessageContent = new Map(parsedMessageContent);
+		}
+
+		isStreaming = false;
+		isLoading = false;
+		streamingMessageId = null;
+		streamingProgress = 100;
+		scrollToBottom();
 	};
 
 	// Auto-select latest conversation on mount
@@ -350,34 +475,42 @@
 		addUserMessage(trimmedMessage);
 		newMessageText = '';
 		isLoading = true;
+		responseClaimedForCurrentRequest = false;
+		wsOwnsCurrentStream = false;
 		scrollToBottom();
 
 		try {
-			// Send message via HTTP API
-			// The backend will emit WebSocket events for streaming if connected
+			// Send message via HTTP API - this triggers the backend to emit WebSocket streaming events
+			// The response rendering is handled entirely by WebSocket handlers (handleStreamStart/Chunk/End)
 			const result = await sendChatMessage(selectedConversationId, trimmedMessage, USER_ID, REFERENCE_MESSAGE_ID);
-			console.log('Response from backend:', JSON.stringify(result, null, 2));
+			console.log('HTTP response received (rendering handled by WebSocket stream):', result?.Status);
 
-			// If we're NOT receiving via WebSocket streaming, handle the HTTP response
-			// The WebSocket handlers will take care of streaming messages
-			if (!isStreaming) {
-				const assistantMessage = buildAssistantMessageFromResult(result, Date.now() + 1);
-				console.log('Built assistant message:', assistantMessage);
-
-				if (assistantMessage) {
-					addAssistantMessage(assistantMessage);
-					scrollToBottom();
-				} else {
-					console.warn('No assistant content found in response. Full response:', result);
-					addAssistantMessage({
-						id: Date.now() + 1,
-						Content: 'Received response but could not parse it. Please check console for details.',
-						Role: 'Assistant'
-					});
-				}
-				isLoading = false;
-			}
-			// If streaming, isLoading will be set to false in handleStreamEnd
+			// // --- HTTP response rendering (commented out - using WebSocket only) ---
+			// if (responseClaimedForCurrentRequest) {
+			// 	console.log('HTTP response skipped - WebSocket already handling this request');
+			// } else {
+			// 	responseClaimedForCurrentRequest = true;
+			// 	const botResponses = extractBotResponseArray(result);
+			// 	if (botResponses && botResponses.length > 0) {
+			// 		console.log('Using progressive rendering for', botResponses.length, 'chunks');
+			// 		await renderChunksProgressively(botResponses, Date.now() + 1);
+			// 	} else {
+			// 		const assistantMessage = buildAssistantMessageFromResult(result, Date.now() + 1);
+			// 		console.log('Built assistant message:', assistantMessage);
+			// 		if (assistantMessage) {
+			// 			addAssistantMessage(assistantMessage);
+			// 			scrollToBottom();
+			// 		} else {
+			// 			console.warn('No assistant content found in response. Full response:', result);
+			// 			addAssistantMessage({
+			// 				id: Date.now() + 1,
+			// 				Content: 'Received response but could not parse it. Please check console for details.',
+			// 				Role: 'Assistant'
+			// 			});
+			// 		}
+			// 		isLoading = false;
+			// 	}
+			// }
 		} catch (error) {
 			console.error('Error sending message:', error);
 			addErrorMessage();
@@ -403,7 +536,7 @@
 		}
 
 		try {
-			const result = await fetchConversationMessages(conversationId);
+			const result = await fetchConversationMessages(conversationId, data.userId);
 			const apiMessages = extractMessagesFromResponse(result);
 
 			if (apiMessages.length > 0) {
@@ -506,7 +639,7 @@
 
 		deletingConversation = true;
 		try {
-			await deleteConversationAPI(conversationToDelete);
+			await deleteConversationAPI(conversationToDelete, data.userId);
 			conversations = conversations.filter((conv) => conv.id !== conversationToDelete);
 
 			if (selectedConversationId === conversationToDelete) {

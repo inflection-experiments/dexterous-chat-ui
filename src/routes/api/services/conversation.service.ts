@@ -6,13 +6,13 @@ import { Helper } from '$lib/utils/helper';
 
 export const getConversationsByUserId = async (userId: string): Promise<Conversation[]> => {
 	try {
-		const url = `${BACKEND_API_URL}/dexterous/chat/conversations/search?userId=${userId}`;
+		const url = `${BACKEND_API_URL}/dexterous/conversations/search?userId=${userId}`;
 		// var cacheKey = `req-${Helper.uuidToBase64(userId)}:getConversationsByUserId`;
 		// if (await RequestResponseCacheService.has(cacheKey)) {
 		// 	return await RequestResponseCacheService.get(cacheKey);
 		// }
-		
-		const response = await get_(url);
+
+		const response = await get_(url, { 'x-user-id': userId });
 		
 		// Handle different response structures - check for Data.Items first (new paginated structure)
 		let result: Conversation[] = [];
@@ -43,17 +43,19 @@ export const getConversationMessages = async (
 	userId: string
 ): Promise<any[]> => {
 	try {
-		const url = `${BACKEND_API_URL}/dexterous/chat/conversations/${conversationId}/messages?userId=${userId}`;
+		const url = `${BACKEND_API_URL}/dexterous/chat/conversations/${conversationId}/messages`;
 		// var cacheKey = `req-${Helper.uuidToBase64(userId)}:getConversationMessages-${Helper.uuidToBase64(conversationId)}`;
 		// if (await RequestResponseCacheService.has(cacheKey)) {
 		// 	return await RequestResponseCacheService.get(cacheKey);
 		// }
-		
-		const response = await get_(url);
-		
+
+		const response = await get_(url, { 'x-user-id': userId });
+
 		// Handle different response structures
 		let result: any[] = [];
-		if (Array.isArray(response)) {
+		if (response.Data && Array.isArray(response.Data)) {
+			result = response.Data;
+		} else if (Array.isArray(response)) {
 			result = response;
 		} else if (response.data && Array.isArray(response.data)) {
 			result = response.data;
@@ -69,7 +71,8 @@ export const getConversationMessages = async (
 	}
 };
 export const getConversationMessagesById = async (
-	conversationId: string
+	conversationId: string,
+	userId?: string
 ): Promise<any[]> => {
 	try {
 		const url = `${BACKEND_API_URL}/dexterous/chat/conversations/${conversationId}/messages`;
@@ -77,8 +80,10 @@ export const getConversationMessagesById = async (
 		// if (await RequestResponseCacheService.has(cacheKey)) {
 		// 	return await RequestResponseCacheService.get(cacheKey);
 		// }
-		
-		const response = await get_(url);
+
+		const headers: Record<string, string> = {};
+		if (userId) headers['x-user-id'] = userId;
+		const response = await get_(url, headers);
 		
 		// Extract messages from response - handle Data (capital D) field
 		let messages: any[] = [];
@@ -104,7 +109,7 @@ export const getConversationMessagesById = async (
 
 export const createConversation = async (projectId: string, userId: string): Promise<any> => {
 	try {
-		const url = `${BACKEND_API_URL}/dexterous/chat/conversations`;
+		const url = `${BACKEND_API_URL}/dexterous/conversations`;
 		const body = {
 			ProjectId: projectId
 		};
@@ -123,10 +128,12 @@ export const createConversation = async (projectId: string, userId: string): Pro
 	}
 };
 
-export const deleteConversation = async (conversationId: string): Promise<any> => {
+export const deleteConversation = async (conversationId: string, userId?: string): Promise<any> => {
 	try {
-		const url = `${BACKEND_API_URL}/dexterous/chat/conversations/${conversationId}`;
-		const response = await delete_(url);
+		const url = `${BACKEND_API_URL}/dexterous/conversations/${conversationId}`;
+		const headers: Record<string, string> = {};
+		if (userId) headers['x-user-id'] = userId;
+		const response = await delete_(url, headers);
 		
 		// Clear related cache entries after deleting conversation
 		const keysToBeDeleted = [
