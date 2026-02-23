@@ -351,11 +351,16 @@ export const sendChatMessage = async (
 	conversationId: string,
 	message: string,
 	userId: string,
-	referenceMessageId: string
+	referenceMessageId: string,
+	action?: {
+		type: string;
+		payload?: any;
+		selectedItems?: any[];
+	}
 ) => {
 	return apiCall('/api/server/chat', {
 		method: 'POST',
-		body: JSON.stringify({ conversationId, message, userId, referenceMessageId })
+		body: JSON.stringify({ conversationId, message, userId, referenceMessageId, ...(action && { action }) })
 	});
 };
 
@@ -375,6 +380,21 @@ export const deleteConversationAPI = async (conversationId: string, userId?: str
 	const params = userId ? `?userId=${userId}` : '';
 	return apiCall(`/api/server/conversations/${conversationId}${params}`, {
 		method: 'DELETE'
+	});
+};
+
+export const confirmSelections = async (payload: {
+	conversationId: string;
+	projectId: string;
+	responseId?: string;
+	entityType: string;
+	selectedItems: any[];
+	action: 'confirm' | 'reject';
+	userId: string;
+}) => {
+	return apiCall('/api/server/selections', {
+		method: 'POST',
+		body: JSON.stringify(payload)
 	});
 };
 

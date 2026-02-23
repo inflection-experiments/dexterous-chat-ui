@@ -17,17 +17,32 @@
 		onButtonAction,
 		onDeleteRow,
 		onDeleteItem,
-		onSaveSelected
+		onSaveSelected,
+		onDropdownChange,
+		onRadioChange
 	}: {
 		structuredResponse: StructuredResponse;
 		messageId: number | string;
 		blockIndex?: number;
 		selectionState?: any;
 		onButtonAction?: (button: any, messageId: number | string) => void;
-		onDeleteRow?: (messageId: number | string, blockIndex: number, rowIndex: number) => void;
+		onDeleteRow?: (messageId: number | string, blockIndex: number, rowIndex: number, rowData: Record<string, string>, entityType: string) => void;
 		onDeleteItem?: (messageId: number | string, blockIndex: number, itemIndex: number) => void;
-		onSaveSelected?: () => void;
+		onSaveSelected?: (messageId: number | string, blockIndex: number, entityType: string) => void;
+		onDropdownChange?: (dropdown: any, selectedValue: string, messageId: number | string) => void;
+		onRadioChange?: (radioGroup: any, selectedValue: string, messageId: number | string) => void;
 	} = $props();
+
+	/**
+	 * Detect entity type from table headers
+	 */
+	function detectEntityType(headers: string[]): string {
+		const joined = headers.join(' ').toLowerCase();
+		if (joined.includes('service')) return 'service';
+		if (joined.includes('model')) return 'model';
+		if (joined.includes('column')) return 'column';
+		return 'service';
+	}
 
 	/**
 	 * Convert LLMUIBlock to block format for existing components
@@ -42,11 +57,11 @@
 			case 'table':
 				if (Array.isArray(block.content) && block.content.length > 0) {
 					let headers = Object.keys(block.content[0]);
-					
+
 					// Reorder headers: Service Name should come before Status
 					const serviceNameIndex = headers.indexOf('Service Name');
 					const statusIndex = headers.indexOf('Status');
-					
+
 					if (serviceNameIndex !== -1 && statusIndex !== -1 && serviceNameIndex > statusIndex) {
 						// Remove Service Name from its current position
 						headers = headers.filter((_, idx) => idx !== serviceNameIndex);
@@ -54,7 +69,7 @@
 						const newStatusIndex = headers.indexOf('Status');
 						headers.splice(newStatusIndex, 0, 'Service Name');
 					}
-					
+
 					const rows = block.content.map((row: any) => headers.map((h) => String(row[h] || '')));
 					return [{
 						type: 'table',
@@ -136,8 +151,9 @@
 					{messageId}
 					blockIndex={blockIndex + idx}
 					{selectionState}
-					onDeleteRow={onDeleteRow || (() => {})}
-					onSaveSelected={onSaveSelected || (() => {})}
+					entityType={detectEntityType(parsedBlock.content.headers || [])}
+					onDeleteRow={onDeleteRow || ((_m, _b, _r, _d, _e) => {})}
+					onSaveSelected={onSaveSelected || ((_m, _b, _e) => {})}
 				/>
 			{:else if parsedBlock.type === 'list'}
 				<ListBlock
@@ -151,8 +167,11 @@
 					<ButtonBlock
 						buttons={[{
 							text: parsedBlock.content.Label || 'Button',
-							className: 'btn-primary',
-							action: parsedBlock.content.Action
+							className: parsedBlock.content.Action === 'reject' ? 'btn-secondary' : 'btn-primary',
+							action: parsedBlock.content.Action,
+							entityType: parsedBlock.content.EntityType || 'service',
+							operation: parsedBlock.content.Operation || '',
+							payload: parsedBlock.content
 						}]}
 						{messageId}
 						onClick={onButtonAction || (() => {})}
@@ -172,6 +191,7 @@
 							placeholder: 'Select an option'
 						}]}
 						{messageId}
+						onChange={onDropdownChange}
 					/>
 				{/if}
 			{:else if parsedBlock.type === 'radioButton'}
@@ -187,6 +207,7 @@
 							}))
 						}]}
 						{messageId}
+						onChange={onRadioChange}
 					/>
 				{/if}
 			{:else if parsedBlock.type === 'link'}
@@ -236,4 +257,3 @@
 		opacity: 0;
 	}
 </style>
-

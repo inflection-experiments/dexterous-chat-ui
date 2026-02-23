@@ -22,7 +22,8 @@
 		fetchConversationMessages,
 		deleteConversationAPI,
 		createSelectionState,
-		buildAssistantMessageFromResult
+		buildAssistantMessageFromResult,
+		confirmSelections
 	} from '$lib/utils/ChatUtils';
 	import { convertBotResponseItemToBlock } from '$lib/utils/chunkTransformer';
 	import type { BotResponseItem } from '$lib/types/streaming';
@@ -71,12 +72,29 @@
 	// WEBSOCKET INITIALIZATION
 	// ==========================================
 
+	// Selection event handlers for TableBlock checkbox interactions
+	const onToggleSelection = (e: Event) => {
+		const detail = (e as CustomEvent).detail;
+		selectionState = selectionManager.toggle(detail.messageId, detail.blockIndex, detail.rowIdx, detail.itemType);
+	};
+
+	const onToggleSelectAll = (e: Event) => {
+		const detail = (e as CustomEvent).detail;
+		selectionState = selectionManager.toggleAll(detail.messageId, detail.blockIndex, detail.totalRows, detail.itemType);
+	};
+
 	onMount(() => {
 		initializeWebSocket();
+		window.addEventListener('toggle-selection', onToggleSelection);
+		window.addEventListener('toggle-select-all', onToggleSelectAll);
 	});
 
 	onDestroy(() => {
 		websocketService.disconnect();
+		if (typeof window !== 'undefined') {
+			window.removeEventListener('toggle-selection', onToggleSelection);
+			window.removeEventListener('toggle-select-all', onToggleSelectAll);
+		}
 	});
 
 	const initializeWebSocket = () => {
@@ -677,24 +695,344 @@
 		selectionState = selectionManager.toggle(messageId, blockIndex, itemIndex, itemType);
 	};
 
-	const handleButtonAction = async (button: any, messageId: number | string) => {
-		console.log('Button action:', button, messageId);
-		// TODO: Implement button action handling
+	const collectSelectedItems = (messageId: number | string): any[] => {
+		const items: any[] = [];
+		const messageSelections = selectionState.get(messageId);
+
+		if (messageSelections) {
+			messageSelections.forEach((state: any, blockIndex: number) => {
+				if (state.type === 'table-rows' && state.selected.size > 0) {
+					// Look for table data in structured blocks first
+					const msg = messages.find((m) => m.id === messageId);
+					if (msg?.StructuredResponse?.blocks) {
+						// Find the table block at this index
+						let tableIdx = 0;
+						for (const block of msg.StructuredResponse.blocks) {
+							if (block.renderType === 'table') {
+								if (tableIdx === blockIndex || blockIndex <= msg.StructuredResponse.blocks.indexOf(block)) {
+									if (Array.isArray(block.content) && block.content.length > 0) {
+										const rows = block.content as Record<string, any>[];
+										Array.from(state.selected).forEach((rowIdx: unknown) => {
+											if (rows[rowIdx as number]) {
+												items.push(rows[rowIdx as number]);
+											}
+										});
+									}
+									break;
+								}
+								tableIdx++;
+							}
+						}
+					}
+
+					// Fallback to parsed markdown content
+					if (items.length === 0) {
+						const parsed = parsedMessageContent.get(messageId);
+						if (parsed && parsed[blockIndex]?.type === 'table') {
+							const table = parsed[blockIndex];
+							Array.from(state.selected).forEach((rowIdx: unknown) => {
+								const row = table.content.rows[rowIdx as number];
+								if (row) {
+									const rowData: any = {};
+									table.content.headers.forEach((header: string, idx: number) => {
+										rowData[header] = row[idx];
+									});
+									items.push(rowData);
+								}
+							});
+						}
+					}
+				} else if (state.type === 'list-items' && state.selected.size > 0) {
+					const parsed = parsedMessageContent.get(messageId);
+					if (parsed && parsed[blockIndex]?.type === 'list') {
+						const list = parsed[blockIndex];
+						Array.from(state.selected).forEach((itemIdx: unknown) => {
+							if (list.content[itemIdx as number]) {
+								items.push(list.content[itemIdx as number]);
+							}
+						});
+					}
+				}
+			});
+		}
+
+		return items;
 	};
 
-	const handleDeleteTableRow = (messageId: number | string, blockIndex: number, rowIndex: number) => {
-		console.log('Delete table row:', messageId, blockIndex, rowIndex);
-		// TODO: Implement table row deletion
+	const handleButtonAction = async (button: any, messageId: number | string) => {
+		console.log('Button action:', button, messageId);
+
+		if (!selectedConversationId) {
+			alert('Please start a conversation first');
+			return;
+		}
+
+		try {
+			isLoading = true;
+
+			// Determine action from button data
+			const action = button.action || button.Action || '';
+			const entityType = button.entityType || button.EntityType || 'service';
+
+			if (action === 'confirm') {
+				// Collect selected items from the message UI
+				const selectedItems = collectSelectedItems(messageId);
+
+				if (selectedItems.length === 0) {
+					alert('No items selected. Please select items from the table first.');
+					isLoading = false;
+					return;
+				}
+
+				const result = await confirmSelections({
+					conversationId: selectedConversationId,
+					projectId: PROJECT_ID,
+					responseId: String(messageId),
+					entityType,
+					selectedItems,
+					action: 'confirm',
+					userId: USER_ID,
+				});
+
+				if (result?.Status === 'success' || result?.status === 'success') {
+					addAssistantMessage({
+						id: Date.now(),
+						Content: `Successfully confirmed and saved ${selectedItems.length} ${entityType}(s) to the database.`,
+						Role: 'Assistant'
+					});
+
+					// Clear selections
+					selectionManager.clear();
+					selectionState = selectionManager.getState();
+					scrollToBottom();
+				} else {
+					addAssistantMessage({
+						id: Date.now(),
+						Content: `Failed to confirm selections: ${result?.Message || result?.message || 'Unknown error'}`,
+						Role: 'Assistant'
+					});
+				}
+			} else if (action === 'reject') {
+				const selectedItems = collectSelectedItems(messageId);
+
+				const result = await confirmSelections({
+					conversationId: selectedConversationId,
+					projectId: PROJECT_ID,
+					responseId: String(messageId),
+					entityType,
+					selectedItems: selectedItems.length > 0 ? selectedItems : [{ rejected: true }],
+					action: 'reject',
+					userId: USER_ID,
+				});
+
+				if (result?.Status === 'success' || result?.status === 'success') {
+					addAssistantMessage({
+						id: Date.now(),
+						Content: `Rejected ${entityType} suggestions.`,
+						Role: 'Assistant'
+					});
+
+					selectionManager.clear();
+					selectionState = selectionManager.getState();
+					scrollToBottom();
+				}
+			} else {
+				// Generic button action - send action intent with full context to backend
+				const buttonLabel = button.text || button.Label || button.label || action;
+				const messageText = buttonLabel;
+
+				// Collect any selected items from tables/lists in the same message
+				const selectedItems = collectSelectedItems(messageId);
+
+				addUserMessage(messageText);
+				scrollToBottom();
+
+				// Reset streaming flags so WebSocket can handle the response
+				responseClaimedForCurrentRequest = false;
+				wsOwnsCurrentStream = false;
+
+				const result = await sendChatMessage(
+					selectedConversationId,
+					messageText,
+					USER_ID,
+					REFERENCE_MESSAGE_ID,
+					{
+						type: action,
+						payload: button.payload || button,
+						...(selectedItems.length > 0 && { selectedItems })
+					}
+				);
+				console.log('Button action response:', result?.Status);
+			}
+
+			isLoading = false;
+		} catch (error) {
+			console.error('Error handling button action:', error);
+			addAssistantMessage({
+				id: Date.now(),
+				Content: 'Error processing button action. Please try again.',
+				Role: 'Assistant'
+			});
+			isLoading = false;
+		}
+	};
+
+	const handleDropdownChange = async (dropdown: any, selectedValue: string, messageId: number | string) => {
+		if (!selectedConversationId) {
+			alert('Please start a conversation first');
+			return;
+		}
+
+		try {
+			const label = dropdown.label || dropdown.name || 'selection';
+			const messageText = `Selected ${label}: ${selectedValue}`;
+			addUserMessage(messageText);
+			isLoading = true;
+			responseClaimedForCurrentRequest = false;
+			wsOwnsCurrentStream = false;
+			scrollToBottom();
+
+			const result = await sendChatMessage(
+				selectedConversationId,
+				messageText,
+				USER_ID,
+				REFERENCE_MESSAGE_ID,
+				{
+					type: 'dropdown_selection',
+					payload: {
+						id: dropdown.name || dropdown.id,
+						label: dropdown.label,
+						selectedValue
+					}
+				}
+			);
+			console.log('Dropdown action response:', result?.Status);
+			isLoading = false;
+		} catch (error) {
+			console.error('Error handling dropdown change:', error);
+			addErrorMessage();
+			isLoading = false;
+		}
+	};
+
+	const handleRadioChange = async (radioGroup: any, selectedValue: string, messageId: number | string) => {
+		if (!selectedConversationId) {
+			alert('Please start a conversation first');
+			return;
+		}
+
+		try {
+			const selectedOption = radioGroup.options?.find((opt: any) => opt.value === selectedValue);
+			const label = radioGroup.label || radioGroup.name || 'option';
+			const messageText = `Selected ${label}: ${selectedOption?.label || selectedValue}`;
+			addUserMessage(messageText);
+			isLoading = true;
+			responseClaimedForCurrentRequest = false;
+			wsOwnsCurrentStream = false;
+			scrollToBottom();
+
+			const result = await sendChatMessage(
+				selectedConversationId,
+				messageText,
+				USER_ID,
+				REFERENCE_MESSAGE_ID,
+				{
+					type: 'radio_selection',
+					payload: {
+						id: radioGroup.name || radioGroup.id,
+						label: radioGroup.label,
+						selectedValue,
+						selectedLabel: selectedOption?.label || selectedValue
+					}
+				}
+			);
+			console.log('Radio action response:', result?.Status);
+			isLoading = false;
+		} catch (error) {
+			console.error('Error handling radio change:', error);
+			addErrorMessage();
+			isLoading = false;
+		}
+	};
+
+	const handleDeleteTableRow = async (messageId: number | string, blockIndex: number, rowIndex: number, rowData: Record<string, string>, entityType: string) => {
+		// Row is already visually marked as rejected by TableBlock (optimistic update)
+		// Send reject to backend
+		if (selectedConversationId) {
+			try {
+				const result = await confirmSelections({
+					conversationId: selectedConversationId,
+					projectId: PROJECT_ID,
+					responseId: String(messageId),
+					entityType,
+					selectedItems: [rowData],
+					action: 'reject',
+					userId: USER_ID,
+				});
+				console.log('Row rejected successfully:', rowData, result);
+			} catch (error) {
+				console.error('Error rejecting row:', error);
+			}
+		}
 	};
 
 	const handleDeleteListItem = (messageId: number | string, blockIndex: number, itemIndex: number) => {
-		console.log('Delete list item:', messageId, blockIndex, itemIndex);
-		// TODO: Implement list item deletion
+		const parsed = parsedMessageContent.get(messageId);
+		if (parsed && (parsed[blockIndex]?.type === 'list' || parsed[blockIndex]?.type === 'checklist')) {
+			parsed[blockIndex].content.splice(itemIndex, 1);
+			parsedMessageContent.set(messageId, [...parsed]);
+			parsedMessageContent = new Map(parsedMessageContent);
+			updateMessageContent(messageId);
+		}
 	};
 
-	const saveSelectedRowsToStorage = async () => {
-		console.log('Save selected rows to storage');
-		// TODO: Implement save selected rows
+	const saveSelectedRowsToStorage = async (messageId: number | string, blockIndex: number, entityType: string) => {
+		if (!selectedConversationId) {
+			alert('Please start a conversation first');
+			return;
+		}
+
+		// Collect selected items from the specific message
+		const selectedItems = collectSelectedItems(messageId);
+
+		if (selectedItems.length === 0) {
+			alert('No items selected. Please select items first.');
+			return;
+		}
+
+		try {
+			isLoading = true;
+
+			const result = await confirmSelections({
+				conversationId: selectedConversationId,
+				projectId: PROJECT_ID,
+				responseId: String(messageId),
+				entityType,
+				selectedItems,
+				action: 'confirm',
+				userId: USER_ID,
+			});
+
+			if (result?.Status === 'success' || result?.status === 'success') {
+				addAssistantMessage({
+					id: Date.now(),
+					Content: `Successfully saved ${selectedItems.length} ${entityType}(s) to the database.`,
+					Role: 'Assistant'
+				});
+
+				selectionManager.clear();
+				selectionState = selectionManager.getState();
+				scrollToBottom();
+			} else {
+				alert('Failed to save selected items. Please try again.');
+			}
+
+			isLoading = false;
+		} catch (error) {
+			console.error('Error saving selected items:', error);
+			alert('Error saving items to database. Please try again.');
+			isLoading = false;
+		}
 	};
 
 	// const handleDeleteTableRow = (messageId: number | string, blockIndex: number, rowIndex: number) => {
@@ -996,9 +1334,9 @@
 						onDeleteRow={handleDeleteTableRow}
 						onDeleteItem={handleDeleteListItem}
 						onSaveSelected={saveSelectedRowsToStorage}
+						onDropdownChange={handleDropdownChange}
+						onRadioChange={handleRadioChange}
 						/>
-						<!-- onDropdownChange={handleDropdownChange}
-						onRadioChange={handleRadioChange} -->
 				{/each}
 
 				{#if isLoading && !isStreaming}

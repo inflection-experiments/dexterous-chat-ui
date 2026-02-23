@@ -25,15 +25,20 @@ export const post_ = async (url: string, bodyObj: any) => {
 	}
 };
 
-export const post__ = async (url: string, bodyObj: any, userId?: string) => {
+export const post__ = async (url: string, bodyObj: any, userId?: string, authHeader?: string) => {
 	try {
 		const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-		
+
 		// Add x-user-id header if userId is provided
 		if (userId) {
 			headers['x-user-id'] = userId;
 		}
-		
+
+		// Forward authorization header if provided (for Deft Source API auth)
+		if (authHeader) {
+			headers['authorization'] = authHeader;
+		}
+
 		const body = JSON.stringify(bodyObj);
 
 		console.log('Body sent to dexterous service backend', JSON.stringify(bodyObj, null, 2));

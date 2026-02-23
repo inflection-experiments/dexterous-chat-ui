@@ -19,10 +19,18 @@
 		messageId: number | string;
 		selectionState: any;
 		onButtonAction: (button: any, messageId: number | string) => void;
-		onDeleteRow: (messageId: number | string, blockIndex: number, rowIndex: number) => void;
+		onDeleteRow: (messageId: number | string, blockIndex: number, rowIndex: number, rowData: Record<string, string>, entityType: string) => void;
 		onDeleteItem: (messageId: number | string, blockIndex: number, itemIndex: number) => void;
-		onSaveSelected: () => void;
+		onSaveSelected: (messageId: number | string, blockIndex: number, entityType: string) => void;
 	} = $props();
+
+	function detectEntityType(headers: string[]): string {
+		const joined = headers.join(' ').toLowerCase();
+		if (joined.includes('service')) return 'service';
+		if (joined.includes('model')) return 'model';
+		if (joined.includes('column')) return 'column';
+		return 'service';
+	}
 </script>
 
 <div class="mb-2 text-[0.95rem] leading-[1.7] text-white">
@@ -51,6 +59,7 @@
 				{messageId}
 				{blockIndex}
 				{selectionState}
+				entityType={detectEntityType(block.content?.headers || [])}
 				{onDeleteRow}
 				{onSaveSelected}
 			/>

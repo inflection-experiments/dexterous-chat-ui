@@ -17,7 +17,8 @@ export const POST = async (event: RequestEvent) => {
 			data.conversationId,
 			data.message,
 			data.userId,
-			data.referenceMessageId
+			data.referenceMessageId,
+			data.action
 		);
 
 		if (!backendResponse) {

@@ -4,7 +4,10 @@
       "Bash(tree:*)",
       "Bash(npx svelte-kit sync)",
       "Bash(npx svelte-check:*)",
-      "Bash(dir /B /S \"d:\\\\Deft One\\\\Inflection-expeiments\\\\dexterous-chat-ui\\\\src\\\\routes\")"
+      "Bash(dir /B /S \"d:\\\\Deft One\\\\Inflection-expeiments\\\\dexterous-chat-ui\\\\src\\\\routes\")",
+      "Bash(dir:*)",
+      "Bash(powershell -Command:*)",
+      "Bash(find:*)"
     ]
   }
 }

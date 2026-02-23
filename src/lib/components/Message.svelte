@@ -12,16 +12,20 @@
 		onButtonAction,
 		onDeleteRow,
 		onDeleteItem,
-		onSaveSelected
+		onSaveSelected,
+		onDropdownChange,
+		onRadioChange
 	}: {
 		message: Message;
 		userId: string;
 		parsedContent: any[];
 		selectionState: any;
 		onButtonAction: (button: any, messageId: number | string) => void;
-		onDeleteRow: (messageId: number | string, blockIndex: number, rowIndex: number) => void;
+		onDeleteRow: (messageId: number | string, blockIndex: number, rowIndex: number, rowData: Record<string, string>, entityType: string) => void;
 		onDeleteItem: (messageId: number | string, blockIndex: number, itemIndex: number) => void;
-		onSaveSelected: () => void;
+		onSaveSelected: (messageId: number | string, blockIndex: number, entityType: string) => void;
+		onDropdownChange?: (dropdown: any, selectedValue: string, messageId: number | string) => void;
+		onRadioChange?: (radioGroup: any, selectedValue: string, messageId: number | string) => void;
 	} = $props();
 
 	const isUser = message.Role === 'User';
@@ -74,6 +78,8 @@
 						{onDeleteRow}
 						{onDeleteItem}
 						{onSaveSelected}
+						{onDropdownChange}
+						{onRadioChange}
 					/>
 				{:else}
 					<MessageContent
