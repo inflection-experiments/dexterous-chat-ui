@@ -12,13 +12,24 @@ export function convertChunkToBlock(chunk: ResponseChunk): LLMUIBlock | null {
 
 	const dataType = normalizeDataType(item.DataType);
 	const format = normalizeFormat(item.Format);
-	const renderType = normalizeRenderType(item.RenderType, format, chunk.chunkType);
+	let renderType = normalizeRenderType(item.RenderType, format, chunk.chunkType);
+	let content = item.Content;
+
+	// Detect markdown-wrapped code blocks: if renderType is 'code' but content is
+	// wrapped in ```markdown fences, treat it as markdown text instead
+	if (renderType === 'code' && typeof content === 'string') {
+		const mdFenceMatch = content.trim().match(/^```\s*(?:markdown|md)\s*\n([\s\S]*?)\n\s*```\s*$/);
+		if (mdFenceMatch && mdFenceMatch[1]) {
+			renderType = 'markdown';
+			content = mdFenceMatch[1].trim();
+		}
+	}
 
 	return {
 		datatype: dataType,
 		format: format,
 		renderType: renderType,
-		content: item.Content
+		content: content
 	};
 }
 
@@ -33,13 +44,24 @@ export function convertBotResponseItemToBlock(item: BotResponseItem): LLMUIBlock
 
 	const dataType = normalizeDataType(item.DataType);
 	const format = normalizeFormat(item.Format);
-	const renderType = normalizeRenderTypeFromItem(item.RenderType, format);
+	let renderType = normalizeRenderTypeFromItem(item.RenderType, format);
+	let content = item.Content;
+
+	// Detect markdown-wrapped code blocks: if renderType is 'code' but content is
+	// wrapped in ```markdown fences, treat it as markdown text instead
+	if (renderType === 'code' && typeof content === 'string') {
+		const mdFenceMatch = content.trim().match(/^```\s*(?:markdown|md)\s*\n([\s\S]*?)\n\s*```\s*$/);
+		if (mdFenceMatch && mdFenceMatch[1]) {
+			renderType = 'markdown';
+			content = mdFenceMatch[1].trim();
+		}
+	}
 
 	return {
 		datatype: dataType,
 		format: format,
 		renderType: renderType,
-		content: item.Content
+		content: content
 	};
 }
 

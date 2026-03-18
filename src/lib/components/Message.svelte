@@ -10,6 +10,7 @@
 		parsedContent,
 		selectionState,
 		onButtonAction,
+		onDownload,
 		onDeleteRow,
 		onDeleteItem,
 		onSaveSelected,
@@ -21,6 +22,7 @@
 		parsedContent: any[];
 		selectionState: any;
 		onButtonAction: (button: any, messageId: number | string) => void;
+		onDownload?: (url: string, fileName: string) => void;
 		onDeleteRow: (messageId: number | string, blockIndex: number, rowIndex: number, rowData: Record<string, string>, entityType: string) => void;
 		onDeleteItem: (messageId: number | string, blockIndex: number, itemIndex: number) => void;
 		onSaveSelected: (messageId: number | string, blockIndex: number, entityType: string) => void;
@@ -75,6 +77,7 @@
 						messageId={message.id}
 						{selectionState}
 						{onButtonAction}
+						{onDownload}
 						{onDeleteRow}
 						{onDeleteItem}
 						{onSaveSelected}

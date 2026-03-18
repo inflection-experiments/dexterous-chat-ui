@@ -109,12 +109,22 @@ function extractBotResponseArray(backendResponse: any): any[] | null {
  * Maps backend types (Content, DataType, Format, RenderType, Sequence) to frontend LLMUIBlock
  */
 function convertBotResponseToBlock(botResponse: any): LLMUIBlock | null {
-	const content = botResponse?.Content;
+	let content = botResponse?.Content;
 	if (content === undefined || content === null) return null;
 
 	const dataType = normalizeDataType(botResponse.DataType);
 	const format = normalizeFormat(botResponse.Format);
-	const renderType = normalizeRenderType(botResponse.RenderType, format, content);
+	let renderType = normalizeRenderType(botResponse.RenderType, format, content);
+
+	// Detect markdown-wrapped code blocks: if renderType is 'code' but content is
+	// wrapped in ```markdown fences, treat it as markdown text instead
+	if (renderType === 'code' && typeof content === 'string') {
+		const mdFenceMatch = content.trim().match(/^```\s*(?:markdown|md)\s*\n([\s\S]*?)\n\s*```\s*$/);
+		if (mdFenceMatch && mdFenceMatch[1]) {
+			renderType = 'markdown';
+			content = mdFenceMatch[1].trim();
+		}
+	}
 
 	return {
 		datatype: dataType,

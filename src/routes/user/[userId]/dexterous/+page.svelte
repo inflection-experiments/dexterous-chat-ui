@@ -123,6 +123,7 @@
 
 		isStreaming = true;
 		wsOwnsCurrentStream = true;
+		responseClaimedForCurrentRequest = true;
 		streamingMessageId = event.messageId;
 		streamingBlocks = [];
 		streamingProgress = 0;
@@ -498,37 +499,35 @@
 		scrollToBottom();
 
 		try {
-			// Send message via HTTP API - this triggers the backend to emit WebSocket streaming events
-			// The response rendering is handled entirely by WebSocket handlers (handleStreamStart/Chunk/End)
+			// Send message via HTTP API - this also triggers backend WebSocket streaming events
 			const result = await sendChatMessage(selectedConversationId, trimmedMessage, USER_ID, REFERENCE_MESSAGE_ID);
-			console.log('HTTP response received (rendering handled by WebSocket stream):', result?.Status);
 
-			// // --- HTTP response rendering (commented out - using WebSocket only) ---
-			// if (responseClaimedForCurrentRequest) {
-			// 	console.log('HTTP response skipped - WebSocket already handling this request');
-			// } else {
-			// 	responseClaimedForCurrentRequest = true;
-			// 	const botResponses = extractBotResponseArray(result);
-			// 	if (botResponses && botResponses.length > 0) {
-			// 		console.log('Using progressive rendering for', botResponses.length, 'chunks');
-			// 		await renderChunksProgressively(botResponses, Date.now() + 1);
-			// 	} else {
-			// 		const assistantMessage = buildAssistantMessageFromResult(result, Date.now() + 1);
-			// 		console.log('Built assistant message:', assistantMessage);
-			// 		if (assistantMessage) {
-			// 			addAssistantMessage(assistantMessage);
-			// 			scrollToBottom();
-			// 		} else {
-			// 			console.warn('No assistant content found in response. Full response:', result);
-			// 			addAssistantMessage({
-			// 				id: Date.now() + 1,
-			// 				Content: 'Received response but could not parse it. Please check console for details.',
-			// 				Role: 'Assistant'
-			// 			});
-			// 		}
-			// 		isLoading = false;
-			// 	}
-			// }
+			// HTTP fallback: if WebSocket already rendered the response, skip.
+			// Otherwise use the HTTP result to display the message.
+			if (responseClaimedForCurrentRequest) {
+				console.log('HTTP response skipped - WebSocket already handled this request');
+			} else {
+				responseClaimedForCurrentRequest = true;
+				const botResponses = extractBotResponseArray(result);
+				if (botResponses && botResponses.length > 0) {
+					console.log('Using progressive rendering for', botResponses.length, 'chunks');
+					await renderChunksProgressively(botResponses, Date.now() + 1);
+				} else {
+					const assistantMessage = buildAssistantMessageFromResult(result, Date.now() + 1);
+					if (assistantMessage) {
+						addAssistantMessage(assistantMessage);
+						scrollToBottom();
+					} else {
+						console.warn('No assistant content found in response. Full response:', result);
+						addAssistantMessage({
+							id: Date.now() + 1,
+							Content: 'Received response but could not parse it. Please check console for details.',
+							Role: 'Assistant'
+						});
+					}
+					isLoading = false;
+				}
+			}
 		} catch (error) {
 			console.error('Error sending message:', error);
 			addErrorMessage();
@@ -812,6 +811,39 @@
 						Role: 'Assistant'
 					});
 				}
+			} else if (action === 'download') {
+				// Download action - fetch with auth headers, then trigger browser save
+				const url = button.payload?.URL || button.URL || button.url || '';
+				if (url) {
+					try {
+						const resp = await fetch(url, {
+							headers: { 'x-user-id': USER_ID },
+						});
+						if (!resp.ok) {
+							console.error('Download failed:', resp.status, resp.statusText);
+							alert('Download failed. The file may have expired.');
+							isLoading = false;
+							return;
+						}
+						const blob = await resp.blob();
+						const fileName = button.payload?.Label || button.text || 'config.json';
+						const blobUrl = URL.createObjectURL(blob);
+						const a = document.createElement('a');
+						a.href = blobUrl;
+						a.download = fileName;
+						document.body.appendChild(a);
+						a.click();
+						document.body.removeChild(a);
+						URL.revokeObjectURL(blobUrl);
+					} catch (err) {
+						console.error('Download error:', err);
+						alert('Download failed. Please try again.');
+					}
+				} else {
+					console.warn('Download button clicked but no URL found in payload:', button);
+				}
+				isLoading = false;
+				return;
 			} else if (action === 'reject') {
 				const selectedItems = collectSelectedItems(messageId);
 
@@ -912,6 +944,31 @@
 			console.error('Error handling dropdown change:', error);
 			addErrorMessage();
 			isLoading = false;
+		}
+	};
+
+	const handleDownload = async (url: string, fileName: string) => {
+		try {
+			const resp = await fetch(url, {
+				headers: { 'x-user-id': USER_ID },
+			});
+			if (!resp.ok) {
+				console.error('Download failed:', resp.status, resp.statusText);
+				alert('Download failed. The file may have expired.');
+				return;
+			}
+			const blob = await resp.blob();
+			const blobUrl = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = blobUrl;
+			a.download = fileName;
+			document.body.appendChild(a);
+			a.click();
+			document.body.removeChild(a);
+			URL.revokeObjectURL(blobUrl);
+		} catch (err) {
+			console.error('Download error:', err);
+			alert('Download failed. Please try again.');
 		}
 	};
 
@@ -1331,6 +1388,7 @@
 						parsedContent={getParsedContent(message.id, message.Content)}
 						{selectionState}
 						onButtonAction={handleButtonAction}
+						onDownload={handleDownload}
 						onDeleteRow={handleDeleteTableRow}
 						onDeleteItem={handleDeleteListItem}
 						onSaveSelected={saveSelectedRowsToStorage}

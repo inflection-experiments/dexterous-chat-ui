@@ -265,7 +265,15 @@ function extractDropdowns(text: string): { dropdowns: Dropdown[]; cleanedText: s
 }
 
 export function parseMarkdown(md: string): ParsedBlock[] {
-	const lines = md.split('\n');
+	// Pre-process: split inline heading markers onto separate lines
+	// This handles cases where content arrives as one long string with #### inline
+	// e.g., "Summary text #### Heading Content" → "Summary text\n#### Heading Content"
+	let preprocessed = md.replace(/([^\n])(\s*#{1,6}\s+)/g, '$1\n$2');
+	// Also split inline numbered list items onto separate lines
+	// e.g., "some text 1. First item 2. Second item" → "some text\n1. First item\n2. Second item"
+	preprocessed = preprocessed.replace(/([^\n])\s+(\d+\.\s)/g, '$1\n$2');
+
+	const lines = preprocessed.split('\n');
 	const result: ParsedBlock[] = [];
 	let i = 0;
 
@@ -282,14 +290,23 @@ export function parseMarkdown(md: string): ParsedBlock[] {
 			}
 			result.push({ type: 'code', language, content: codeLines.join('\n') });
 			i++;
-		} else if (line.startsWith('# ')) {
-			result.push({ type: 'h1', content: line.substring(2) });
+		} else if (line.startsWith('###### ')) {
+			result.push({ type: 'h6', content: line.substring(7) });
+			i++;
+		} else if (line.startsWith('##### ')) {
+			result.push({ type: 'h5', content: line.substring(6) });
+			i++;
+		} else if (line.startsWith('#### ')) {
+			result.push({ type: 'h4', content: line.substring(5) });
+			i++;
+		} else if (line.startsWith('### ')) {
+			result.push({ type: 'h3', content: line.substring(4) });
 			i++;
 		} else if (line.startsWith('## ')) {
 			result.push({ type: 'h2', content: line.substring(3) });
 			i++;
-		} else if (line.startsWith('### ')) {
-			result.push({ type: 'h3', content: line.substring(4) });
+		} else if (line.startsWith('# ')) {
+			result.push({ type: 'h1', content: line.substring(2) });
 			i++;
 		} else if (line.trim() === '---') {
 			result.push({ type: 'hr' });
@@ -318,6 +335,19 @@ export function parseMarkdown(md: string): ParsedBlock[] {
 			) {
 				const indent = lines[i].search(/\S/);
 				const text = lines[i].trim().substring(2);
+				listItems.push({ text, indent });
+				i++;
+			}
+			result.push({ type: 'list', content: listItems });
+		} else if (line.trim().match(/^\d+\.\s/)) {
+			// Numbered/ordered list items
+			const listItems: ListItem[] = [];
+			while (
+				i < lines.length &&
+				(lines[i].trim().match(/^\d+\.\s/) || lines[i].trim().startsWith('   '))
+			) {
+				const indent = lines[i].search(/\S/);
+				const text = lines[i].trim().replace(/^\d+\.\s*/, '');
 				listItems.push({ text, indent });
 				i++;
 			}
@@ -485,6 +515,12 @@ export function reconstructMarkdown(blocks: ParsedBlock[]): string {
 			md += `## ${block.content}\n\n`;
 		} else if (block.type === 'h3') {
 			md += `### ${block.content}\n\n`;
+		} else if (block.type === 'h4') {
+			md += `#### ${block.content}\n\n`;
+		} else if (block.type === 'h5') {
+			md += `##### ${block.content}\n\n`;
+		} else if (block.type === 'h6') {
+			md += `###### ${block.content}\n\n`;
 		} else if (block.type === 'hr') {
 			md += '---\n\n';
 		} else if (block.type === 'code') {

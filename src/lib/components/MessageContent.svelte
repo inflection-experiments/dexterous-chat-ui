@@ -49,6 +49,18 @@
 			<h3 class="mt-3 mb-2 text-lg font-semibold text-white first:mt-0">
 				{@html parseInlineFormatting(block.content)}
 			</h3>
+		{:else if block.type === 'h4'}
+			<h4 class="mt-3 mb-1.5 text-base font-semibold text-white first:mt-0">
+				{@html parseInlineFormatting(block.content)}
+			</h4>
+		{:else if block.type === 'h5'}
+			<h5 class="mt-2 mb-1 text-sm font-semibold text-white/90 first:mt-0">
+				{@html parseInlineFormatting(block.content)}
+			</h5>
+		{:else if block.type === 'h6'}
+			<h6 class="mt-2 mb-1 text-sm font-medium text-white/80 first:mt-0">
+				{@html parseInlineFormatting(block.content)}
+			</h6>
 		{:else if block.type === 'hr'}
 			<hr class="my-4 border-t border-white/20" />
 		{:else if block.type === 'code'}

@@ -50,7 +50,6 @@ export const sendMessageToMastra = async (
 		};
 
 		const url = `${BACKEND_API_URL}/dexterous/chat/messages`;
-
 		const response = await post__(url, body, userId);
 
 		// Return the raw backend response so the client can access
@@ -61,3 +60,9 @@ export const sendMessageToMastra = async (
 		throw error;
 	}
 };
+
+
+// software engineer(Full stack, generative AI & ML)
+// remove ahmednagar
+// remove embeded
+// add skills in tabular format
