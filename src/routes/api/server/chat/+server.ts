@@ -1,6 +1,5 @@
 import { json, type RequestEvent } from '@sveltejs/kit';
 import { sendMessageToMastra } from '../../services/chat.service';
-import { ResponseHandler } from '$lib/utils/response.handler';
 
 export const POST = async (event: RequestEvent) => {
 	try {
@@ -18,12 +17,25 @@ export const POST = async (event: RequestEvent) => {
 			data.conversationId,
 			data.message,
 			data.userId,
-			data.referenceMessageId
+			data.referenceMessageId,
+			data.action
 		);
 
-		return ResponseHandler.formatServerResponse(backendResponse);
+		if (!backendResponse) {
+			return json(
+				{ status: 'error', message: 'Failed to get response from AI' },
+				{ status: 500 }
+			);
+		}
+
+		// Return the full backend response (including Data.BotResponse)
+		// so the client can use progressive rendering and structured content
+		return json(backendResponse);
 	} catch (error) {
 		console.error('Error in chat API server endpoint:', error);
-		return ResponseHandler.handleError(500, null, error);
+		return json(
+			{ status: 'error', message: error instanceof Error ? error.message : 'Internal Server Error' },
+			{ status: 500 }
+		);
 	}
 };
